@@ -10,3 +10,7 @@ terraform.tfvars
 # AWS credentials
 *.pem
 .aws/
+
+# Node.js
+node_modules/
+lambda/*/node_modules/
