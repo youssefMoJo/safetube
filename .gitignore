@@ -1,0 +1,12 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+terraform.tfvars
+*.backup
+.terraform.lock.hcl
+
+# AWS credentials
+*.pem
+.aws/
