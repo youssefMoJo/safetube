@@ -42,8 +42,8 @@ export const handler = async (event) => {
       //   description: data.description || "",
       //   thumbnail_url: data.thumbnail,
       //   duration: data.duration,
-      //   youtube_link,
-      //   uploaded_by,
+      youtube_link,
+      uploaded_by,
       status: "pending",
       created_at: new Date().toISOString(),
     };
