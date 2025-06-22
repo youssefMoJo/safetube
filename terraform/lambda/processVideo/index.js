@@ -2,11 +2,14 @@ import axios from "axios";
 import { v4 as uuidv4 } from "uuid";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 
 const client = new DynamoDBClient({});
 const ddb = DynamoDBDocumentClient.from(client);
+const sqsClient = new SQSClient({});
 
 const RAPID_API_KEY = process.env.RAPID_API_KEY; // Set this in Lambda environment variables
+const SQS_QUEUE_URL = process.env.SQS_QUEUE_URL;
 
 export const handler = async (event) => {
   try {
@@ -59,10 +62,21 @@ export const handler = async (event) => {
       })
     );
 
+    // Send message to SQS with the video_id for processing
+    const sendMessageParams = {
+      QueueUrl: SQS_QUEUE_URL,
+      MessageBody: JSON.stringify({
+        video_id: metadata.video_id,
+        youtube_link: metadata.youtube_link,
+        uploaded_by: metadata.uploaded_by,
+      }),
+    };
+    await sqsClient.send(new SendMessageCommand(sendMessageParams));
+
     return {
       statusCode: 200,
       body: JSON.stringify({
-        message: "Video metadata saved",
+        message: "Video metadata saved and processing job queued",
         video_id: metadata.video_id,
       }),
     };
