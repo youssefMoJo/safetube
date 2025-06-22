@@ -6,6 +6,7 @@ crash.log
 terraform.tfvars
 *.backup
 .terraform.lock.hcl
+*.zip
 
 # AWS credentials
 *.pem
