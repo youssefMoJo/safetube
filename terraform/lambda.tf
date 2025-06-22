@@ -14,6 +14,7 @@ resource "aws_lambda_function" "process_video" {
   environment {
     variables = {
       RAPID_API_KEY = var.rapid_api_key
+      SQS_QUEUE_URL   = aws_sqs_queue.video_processing_queue.id
     }
   }
 
