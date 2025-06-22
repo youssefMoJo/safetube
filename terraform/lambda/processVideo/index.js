@@ -38,13 +38,16 @@ export const handler = async (event) => {
 
     const metadata = {
       video_id: uuidv4(),
-      //   title: data.title,
-      //   description: data.description || "",
-      //   thumbnail_url: data.thumbnail,
-      //   duration: data.duration,
+      title: data.title,
+      description: data.stats.description || "",
+      picture: data.picture,
+      duration: data.lengthSeconds,
+      links: data.links,
+      user_url: data.author.user_url,
+      user_name: data.author.name,
       youtube_link,
       uploaded_by,
-      status: "pending",
+      status: "pending", //Track processing lifecycle: pending, processing, done, failed
       created_at: new Date().toISOString(),
     };
 
