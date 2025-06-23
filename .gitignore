@@ -1,17 +1,3 @@
-# Terraform
-.terraform/
-*.tfstate
-*.tfstate.*
-crash.log
-terraform.tfvars
-*.backup
-.terraform.lock.hcl
-*.zip
-
 # AWS credentials
 *.pem
 .aws/
-
-# Node.js
-node_modules/
-lambda/*/node_modules/
