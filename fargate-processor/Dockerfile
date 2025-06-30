@@ -10,4 +10,6 @@ RUN npm install
 
 COPY . .
 
+RUN ls -la /app/cookies.txt
+
 CMD ["node", "processor.js"]

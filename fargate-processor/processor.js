@@ -35,8 +35,6 @@ const pollSQS = async () => {
 
     console.log(`Processing video: ${youtube_link}`);
 
-    const outputFile = `${video_id}.mp4`;
-
     try {
       const { youtube_link, video_id } = JSON.parse(msg.Body);
       const outputFile = `${video_id}.mp4`;
@@ -52,7 +50,11 @@ const pollSQS = async () => {
 };
 
 const downloadVideoWithAudio = async (youtubeLink, outputFile) => {
-  const { stdout } = await execAsync(`yt-dlp -j ${youtubeLink}`);
+  const cleanLink = youtubeLink.split("&")[0];
+  const { stdout } = await execAsync(
+    `yt-dlp --cookies /app/cookies.txt -j "${cleanLink}"`
+  );
+
   const jsonData = JSON.parse(stdout);
 
   const formats = jsonData.formats.map((format) => ({
@@ -71,16 +73,17 @@ const downloadVideoWithAudio = async (youtubeLink, outputFile) => {
   }));
 
   const bestVideo = formats
-    .filter((f) => f.vcodec !== "none")
+    .filter(
+      (f) =>
+        f.vcodec !== "none" &&
+        f.ext === "mp4" &&
+        !f.format_note.includes("webm")
+    )
     .sort((a, b) => (b.tbr || 0) - (a.tbr || 0))[0];
 
   const bestAudio = formats
     .filter(
-      (f) =>
-        f.vcodec === "none" &&
-        f.acodec !== "none" &&
-        f.protocol !== "m3u8" &&
-        f.ext !== "webm"
+      (f) => f.vcodec === "none" && f.acodec !== "none" && f.ext === "m4a"
     )
     .sort((a, b) => (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0))[0];
 
@@ -93,9 +96,13 @@ const downloadVideoWithAudio = async (youtubeLink, outputFile) => {
   );
 
   const formatSelection = `${bestVideo.id}+${bestAudio.id}`;
+
+  const safeLink = youtubeLink.split("&")[0];
+
   await execAsync(
-    `yt-dlp -f ${formatSelection} -o ${outputFile} ${youtubeLink}`
+    `yt-dlp --cookies /app/cookies.txt --merge-output-format mp4 -f ${formatSelection} -o ${outputFile} "${safeLink}"`
   );
+
   console.log(`Downloaded video to ${outputFile}`);
 };
 
