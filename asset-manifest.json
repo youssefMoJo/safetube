@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/safetube/static/css/main.f855e6bc.css",
+    "main.js": "/safetube/static/js/main.a2769589.js",
+    "static/js/453.670e15c7.chunk.js": "/safetube/static/js/453.670e15c7.chunk.js",
+    "index.html": "/safetube/index.html",
+    "main.f855e6bc.css.map": "/safetube/static/css/main.f855e6bc.css.map",
+    "main.a2769589.js.map": "/safetube/static/js/main.a2769589.js.map",
+    "453.670e15c7.chunk.js.map": "/safetube/static/js/453.670e15c7.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.f855e6bc.css",
+    "static/js/main.a2769589.js"
+  ]
+}
