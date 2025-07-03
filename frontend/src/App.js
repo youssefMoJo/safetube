@@ -6,6 +6,8 @@ import FeaturesList from "./components/FeaturesList";
 import ArchitectureSection from "./components/ArchitectureSection";
 import Footer from "./components/Footer";
 import GitHubRepo from "./components/GitHubRepo";
+import ArchitectureScrollCard from "./components/ArchitectureScrollCard";
+import { useEffect } from "react";
 
 import styled from "styled-components";
 
@@ -40,20 +42,34 @@ const ProgressWrapper = styled.div`
 `;
 
 function App() {
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash) {
+      const target = document.getElementById(hash.slice(1));
+      if (target) {
+        target.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }
+    }
+  }, []);
+
   return (
     <div className="App">
       <Header />
       <LaunchSection>
         <TimerWrapper>
-          <CountdownTimer targetDate="2025-07-25T00:00:00" />
+          <CountdownTimer targetDate="2025-08-01T00:00:00" />
         </TimerWrapper>
         <ProgressWrapper>
-          <ProgressBar backendPercent={75} frontendPercent={22} />
+          <ProgressBar backendPercent={60} frontendPercent={10} />
           <GitHubRepo />
+          <ArchitectureScrollCard />
         </ProgressWrapper>
       </LaunchSection>
       <FeaturesList />
-      <ArchitectureSection />
+      <ArchitectureSection id="architecture" />
       <Footer />
     </div>
   );

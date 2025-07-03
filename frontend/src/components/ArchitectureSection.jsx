@@ -40,7 +40,11 @@ const ArchitectureSection = () => {
         database, CloudFront for secure video streaming to the child — and more.
         Take a look 😎
       </Blurb>
-      <Image src={architectureImage} alt="SafeTube Backend Architecture" />
+      <Image
+        id="architecture"
+        src={architectureImage}
+        alt="SafeTube Backend Architecture"
+      />
     </Section>
   );
 };
