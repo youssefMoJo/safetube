@@ -1,8 +1,3 @@
-import {
-  SQSClient,
-  ReceiveMessageCommand,
-  DeleteMessageCommand,
-} from "@aws-sdk/client-sqs";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -11,43 +6,11 @@ import fs from "fs";
 const execAsync = promisify(exec);
 
 const REGION = process.env.AWS_REGION;
-const QUEUE_URL = process.env.SQS_QUEUE_URL;
 const BUCKET_NAME = process.env.S3_BUCKET_NAME;
+const VIDEO_ID = process.env.VIDEO_ID;
+const YOUTUBE_LINK = process.env.YOUTUBE_LINK;
 
-const sqs = new SQSClient({ region: REGION });
 const s3 = new S3Client({ region: REGION });
-
-const pollSQS = async () => {
-  console.log("Polling SQS...");
-
-  const command = new ReceiveMessageCommand({
-    QueueUrl: QUEUE_URL,
-    MaxNumberOfMessages: 1,
-    WaitTimeSeconds: 20,
-  });
-
-  const response = await sqs.send(command);
-  const messages = response.Messages || [];
-
-  for (const msg of messages) {
-    const body = JSON.parse(msg.Body);
-    const { youtube_link, video_id } = body;
-
-    console.log(`Processing video: ${youtube_link}`);
-
-    try {
-      const { youtube_link, video_id } = JSON.parse(msg.Body);
-      const outputFile = `${video_id}.mp4`;
-
-      await downloadVideoWithAudio(youtube_link, outputFile);
-      await uploadToS3(outputFile, BUCKET_NAME, outputFile);
-      deleteFile(outputFile);
-      await deleteMessageFromQueue(msg.ReceiptHandle);
-    } catch (error) {
-      console.error("Failed to process video:", error);
-    }
-  }
-};
 
 const downloadVideoWithAudio = async (youtubeLink, outputFile) => {
   const cleanLink = youtubeLink.split("&")[0];
@@ -96,7 +59,6 @@ const downloadVideoWithAudio = async (youtubeLink, outputFile) => {
   );
 
   const formatSelection = `${bestVideo.id}+${bestAudio.id}`;
-
   const safeLink = youtubeLink.split("&")[0];
 
   await execAsync(
@@ -123,14 +85,25 @@ const deleteFile = (filePath) => {
   console.log(`Deleted local file: ${filePath}`);
 };
 
-const deleteMessageFromQueue = async (receiptHandle) => {
-  await sqs.send(
-    new DeleteMessageCommand({
-      QueueUrl: QUEUE_URL,
-      ReceiptHandle: receiptHandle,
-    })
-  );
-  console.log("Deleted message from SQS");
+const main = async () => {
+  if (!VIDEO_ID || !YOUTUBE_LINK || !BUCKET_NAME) {
+    console.error("Missing required environment variables.");
+    process.exit(1);
+  }
+
+  const outputFile = `${VIDEO_ID}.mp4`;
+
+  try {
+    await downloadVideoWithAudio(YOUTUBE_LINK, outputFile);
+    await uploadToS3(outputFile, BUCKET_NAME, outputFile);
+    deleteFile(outputFile);
+
+    console.log("Video processing complete.");
+    process.exit(0);
+  } catch (error) {
+    console.error("Error during processing:", error);
+    process.exit(1);
+  }
 };
 
-await pollSQS();
+await main();
