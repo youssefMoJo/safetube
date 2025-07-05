@@ -63,7 +63,7 @@ function App() {
           <CountdownTimer targetDate="2025-08-01T00:00:00" />
         </TimerWrapper>
         <ProgressWrapper>
-          <ProgressBar backendPercent={60} frontendPercent={10} />
+          <ProgressBar backendPercent={70} frontendPercent={10} />
           <GitHubRepo />
           <ArchitectureScrollCard />
         </ProgressWrapper>
