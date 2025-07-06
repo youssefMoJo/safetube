@@ -85,13 +85,33 @@ const deleteFile = (filePath) => {
   console.log(`Deleted local file: ${filePath}`);
 };
 
+function extractYouTubeID(url) {
+  try {
+    const parsedUrl = new URL(url);
+    if (parsedUrl.hostname === "youtu.be") {
+      return parsedUrl.pathname.slice(1);
+    } else if (parsedUrl.hostname.includes("youtube.com")) {
+      return parsedUrl.searchParams.get("v");
+    }
+  } catch (error) {
+    console.error("Invalid URL format:", url);
+  }
+  return null;
+}
+
 const main = async () => {
   if (!VIDEO_ID || !YOUTUBE_LINK || !BUCKET_NAME) {
     console.error("Missing required environment variables.");
     process.exit(1);
   }
 
-  const outputFile = `${VIDEO_ID}.mp4`;
+  const youtubeId = extractYouTubeID(YOUTUBE_LINK);
+  if (!youtubeId) {
+    console.error("Failed to extract YouTube ID from link:", YOUTUBE_LINK);
+    process.exit(1);
+  }
+
+  const outputFile = `${youtubeId}.mp4`;
 
   try {
     await downloadVideoWithAudio(YOUTUBE_LINK, outputFile);
