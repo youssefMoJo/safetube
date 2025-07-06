@@ -23,7 +23,7 @@ resource "aws_ecs_task_definition" "safetube_task" {
         },
         {
           name  = "S3_BUCKET_NAME"
-          value = var.s3_bucket_name
+          value = aws_s3_bucket.videos_bucket.bucket
         },
         {
           name  = "AWS_REGION"

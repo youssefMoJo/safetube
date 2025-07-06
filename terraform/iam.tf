@@ -117,12 +117,12 @@ resource "aws_iam_policy" "safetube_task_permissions" {
       {
         Effect   = "Allow",
         Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"],
-        Resource = "*"  # You can limit to the specific queue ARN if you prefer
+        Resource = "*"  
       },
       {
         Effect   = "Allow",
         Action   = ["s3:PutObject"],
-        Resource = "arn:aws:s3:::${var.s3_bucket_name}/*"
+        Resource = "arn:aws:s3:::${aws_s3_bucket.videos_bucket.bucket}/*"
       },
       {
         Effect   = "Allow",

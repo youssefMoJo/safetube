@@ -19,11 +19,6 @@ variable "sqs_queue_url" {
   type        = string
 }
 
-variable "s3_bucket_name" {
-  description = "Name of the S3 bucket to upload videos"
-  type        = string
-}
-
 variable "subnet_ids" {
   description = "List of subnet IDs for ECS tasks"
   type        = list(string)
