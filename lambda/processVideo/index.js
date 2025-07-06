@@ -11,6 +11,20 @@ const sqsClient = new SQSClient({});
 const RAPID_API_KEY = process.env.RAPID_API_KEY; // Set this in Lambda environment variables
 const SQS_QUEUE_URL = process.env.SQS_QUEUE_URL;
 
+function extractYouTubeID(url) {
+  try {
+    const parsedUrl = new URL(url);
+    if (parsedUrl.hostname === "youtu.be") {
+      return parsedUrl.pathname.slice(1);
+    } else if (parsedUrl.hostname.includes("youtube.com")) {
+      return parsedUrl.searchParams.get("v");
+    }
+  } catch (error) {
+    console.error("Invalid URL format:", url);
+  }
+  return null;
+}
+
 export const handler = async (event) => {
   try {
     const body = JSON.parse(event.body);
@@ -40,12 +54,12 @@ export const handler = async (event) => {
     const data = response.data;
 
     const metadata = {
-      video_id: uuidv4(),
+      video_id: extractYouTubeID(youtube_link),
       title: data.title,
       description: data.stats.description || "",
       picture: data.picture,
-      duration: data.lengthSeconds,
-      links: data.links,
+      duration: data.stats.lengthSeconds,
+      // links: data.links,
       user_url: data.author.user_url,
       user_name: data.author.name,
       youtube_link,
