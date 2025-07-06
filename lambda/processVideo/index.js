@@ -1,7 +1,10 @@
 import axios from "axios";
-import { v4 as uuidv4 } from "uuid";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, PutCommand } from "@aws-sdk/lib-dynamodb";
+import {
+  DynamoDBDocumentClient,
+  PutCommand,
+  GetCommand,
+} from "@aws-sdk/lib-dynamodb";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 
 const client = new DynamoDBClient({});
@@ -35,6 +38,33 @@ export const handler = async (event) => {
         statusCode: 400,
         body: JSON.stringify({
           message: "Missing youtube_link or uploaded_by",
+        }),
+      };
+    }
+
+    const youtube_id = extractYouTubeID(youtube_link);
+    if (!youtube_id) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ message: "Invalid YouTube URL" }),
+      };
+    }
+
+    const existing = await ddb.send(
+      new GetCommand({
+        TableName: "safetube_videos",
+        Key: { video_id: youtube_id },
+      })
+    );
+
+    if (existing.Item) {
+      console.log("Video already exists in DB:", youtube_id);
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          message: "Video already exists. No need to download.",
+          video_id: youtube_id,
+          s3_key: existing.Item.s3_key,
         }),
       };
     }
