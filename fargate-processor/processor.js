@@ -112,10 +112,11 @@ const main = async () => {
   }
 
   const outputFile = `${youtubeId}.mp4`;
+  const s3Key = `videos/by_youtube_id/${youtubeId}.mp4`;
 
   try {
     await downloadVideoWithAudio(YOUTUBE_LINK, outputFile);
-    await uploadToS3(outputFile, BUCKET_NAME, outputFile);
+    await uploadToS3(outputFile, BUCKET_NAME, s3Key);
     deleteFile(outputFile);
 
     console.log("Video processing complete.");
