@@ -11,8 +11,9 @@ const client = new DynamoDBClient({});
 const ddb = DynamoDBDocumentClient.from(client);
 const sqsClient = new SQSClient({});
 
-const RAPID_API_KEY = process.env.RAPID_API_KEY; // Set this in Lambda environment variables
+const RAPID_API_KEY = process.env.RAPID_API_KEY;
 const SQS_QUEUE_URL = process.env.SQS_QUEUE_URL;
+const VIDEOS_TABLE = process.env.DYNAMO_VIDEOS_TABLE;
 
 function extractYouTubeID(url) {
   try {
@@ -52,7 +53,7 @@ export const handler = async (event) => {
 
     const existing = await ddb.send(
       new GetCommand({
-        TableName: "safetube_videos",
+        TableName: VIDEOS_TABLE,
         Key: { video_id: youtube_id },
       })
     );
