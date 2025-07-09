@@ -13,3 +13,15 @@ output "video_processing_queue_url" {
 output "video_processing_queue_arn" {
   value = aws_sqs_queue.video_processing_queue.arn
 }
+
+output "safetube_user_pool_id" {
+  value = aws_cognito_user_pool.safetube_user_pool.id
+}
+
+output "safetube_user_pool_arn" {
+  value = aws_cognito_user_pool.safetube_user_pool.arn
+}
+
+output "safetube_user_pool_client_id" {
+  value = aws_cognito_user_pool_client.safetube_user_pool_client.id
+}
