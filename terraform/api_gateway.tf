@@ -13,7 +13,8 @@ resource "aws_api_gateway_method" "post_method" {
   rest_api_id   = aws_api_gateway_rest_api.safetube_api.id
   resource_id   = aws_api_gateway_resource.process.id
   http_method   = "POST"
-  authorization = "NONE"
+  authorization = "COGNITO_USER_POOLS"
+  authorizer_id = aws_api_gateway_authorizer.cognito_authorizer.id
 }
 
 resource "aws_api_gateway_integration" "lambda_integration" {
@@ -35,13 +36,29 @@ resource "aws_lambda_permission" "allow_apigateway" {
 }
 
 resource "aws_api_gateway_deployment" "deployment" {
-  depends_on  = [aws_api_gateway_integration.lambda_integration]
+  depends_on  = [
+  aws_api_gateway_integration.lambda_integration,
+  aws_api_gateway_method.post_method,
+  aws_api_gateway_authorizer.cognito_authorizer]
   rest_api_id = aws_api_gateway_rest_api.safetube_api.id
+  triggers = {
+    redeployment = timestamp()
+  }
 }
 
 resource "aws_api_gateway_stage" "prod" {
   deployment_id = aws_api_gateway_deployment.deployment.id
   rest_api_id   = aws_api_gateway_rest_api.safetube_api.id
   stage_name    = "prod"
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
+resource "aws_api_gateway_authorizer" "cognito_authorizer" {
+  name            = "safetube-cognito-authorizer"
+  rest_api_id     = aws_api_gateway_rest_api.safetube_api.id
+  identity_source = "method.request.header.Authorization"
+  type            = "COGNITO_USER_POOLS"
+  provider_arns   = [aws_cognito_user_pool.safetube_user_pool.arn]
+}
