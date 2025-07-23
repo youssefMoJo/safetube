@@ -60,10 +60,10 @@ function App() {
       <Header />
       <LaunchSection>
         <TimerWrapper>
-          <CountdownTimer targetDate="2025-08-01T00:00:00" />
+          <CountdownTimer targetDate="2025-08-25T00:00:00" />
         </TimerWrapper>
         <ProgressWrapper>
-          <ProgressBar backendPercent={75} frontendPercent={10} />
+          <ProgressBar backendPercent={76} frontendPercent={10} />
           <GitHubRepo />
           <ArchitectureScrollCard />
         </ProgressWrapper>
