@@ -58,7 +58,7 @@ function App() {
   return (
     <div className="App">
       <Header />
-      <LaunchSection>
+      {/* <LaunchSection>
         <TimerWrapper>
           <CountdownTimer targetDate="2025-09-30T00:00:00" />
         </TimerWrapper>
@@ -67,9 +67,10 @@ function App() {
           <GitHubRepo />
           <ArchitectureScrollCard />
         </ProgressWrapper>
-      </LaunchSection>
-      <FeaturesList />
+      </LaunchSection> */}
       <ArchitectureSection id="architecture" />
+      <FeaturesList />
+
       <Footer />
     </div>
   );
