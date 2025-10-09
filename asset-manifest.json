@@ -1,17 +1,17 @@
 {
   "files": {
     "main.css": "/safetube/static/css/main.45101f2d.css",
-    "main.js": "/safetube/static/js/main.591aa1f7.js",
+    "main.js": "/safetube/static/js/main.32e69d27.js",
     "static/js/453.670e15c7.chunk.js": "/safetube/static/js/453.670e15c7.chunk.js",
     "static/media/safetube_backend_architecture.png": "/safetube/static/media/safetube_backend_architecture.1fe208198ca689157dbb.png",
     "static/media/Jlogo.png": "/safetube/static/media/Jlogo.be3ea516e4fd74ce93d2.png",
     "index.html": "/safetube/index.html",
     "main.45101f2d.css.map": "/safetube/static/css/main.45101f2d.css.map",
-    "main.591aa1f7.js.map": "/safetube/static/js/main.591aa1f7.js.map",
+    "main.32e69d27.js.map": "/safetube/static/js/main.32e69d27.js.map",
     "453.670e15c7.chunk.js.map": "/safetube/static/js/453.670e15c7.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.45101f2d.css",
-    "static/js/main.591aa1f7.js"
+    "static/js/main.32e69d27.js"
   ]
 }
