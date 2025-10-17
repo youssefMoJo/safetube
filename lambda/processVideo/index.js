@@ -58,7 +58,7 @@ export const handler = async (event) => {
       })
     );
 
-    if (existing.Item) {
+    if (existing.Item && existing.Item.status === "done") {
       console.log("Video already exists in DB:", youtube_id);
       return {
         statusCode: 200,
@@ -114,6 +114,7 @@ export const handler = async (event) => {
         video_id: metadata.video_id,
         youtube_link: metadata.youtube_link,
         uploaded_by: metadata.uploaded_by,
+        dynamo_videos_table: VIDEOS_TABLE,
       }),
     };
     await sqsClient.send(new SendMessageCommand(sendMessageParams));
