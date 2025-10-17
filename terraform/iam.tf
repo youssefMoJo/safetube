@@ -133,6 +133,26 @@ resource "aws_iam_policy" "safetube_task_permissions" {
   })
 }
 
+resource "aws_iam_role_policy" "ecs_task_dynamodb_policy" {
+  name = "ecs-task-dynamodb-access"
+  role = aws_iam_role.ecs_task_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:UpdateItem",
+          "dynamodb:PutItem",
+          "dynamodb:GetItem"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role_policy_attachment" "attach_task_permissions" {
   role       = aws_iam_role.ecs_task_role.name
   policy_arn = aws_iam_policy.safetube_task_permissions.arn

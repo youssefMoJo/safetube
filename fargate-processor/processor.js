@@ -2,6 +2,7 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { exec } from "child_process";
 import { promisify } from "util";
 import fs from "fs";
+import { DynamoDBClient, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 
 const execAsync = promisify(exec);
 
@@ -9,14 +10,48 @@ const REGION = process.env.AWS_REGION;
 const BUCKET_NAME = process.env.S3_BUCKET_NAME;
 const VIDEO_ID = process.env.VIDEO_ID;
 const YOUTUBE_LINK = process.env.YOUTUBE_LINK;
+const DYNAMO_VIDEOS_TABLE = process.env.DYNAMO_VIDEOS_TABLE;
 
 const s3 = new S3Client({ region: REGION });
+const dynamo = new DynamoDBClient({ region: REGION });
+// Helper to update DynamoDB status
+async function updateVideoStatus(videoId, status, errorMessage = null) {
+  if (!DYNAMO_VIDEOS_TABLE || !videoId) return;
+  const params = {
+    TableName: DYNAMO_VIDEOS_TABLE,
+    Key: { video_id: { S: videoId } },
+    UpdateExpression: errorMessage
+      ? "SET #s = :s, #err = :e"
+      : "SET #s = :s REMOVE #err",
+    ExpressionAttributeNames: {
+      "#s": "status",
+      "#err": "error",
+    },
+    ExpressionAttributeValues: {
+      ":s": { S: status },
+    },
+  };
+  if (errorMessage) {
+    params.ExpressionAttributeValues[":e"] = { S: errorMessage };
+  }
+  try {
+    await dynamo.send(new UpdateItemCommand(params));
+  } catch (err) {
+    console.error("Failed to update DynamoDB status:", err);
+  }
+}
 
 const downloadVideoWithAudio = async (youtubeLink, outputFile) => {
   const cleanLink = youtubeLink.split("&")[0];
-  const { stdout } = await execAsync(
-    `yt-dlp --cookies /app/cookies.txt -j "${cleanLink}"`
-  );
+  let stdout;
+  try {
+    ({ stdout } = await execAsync(
+      `yt-dlp --cookies /app/cookies.txt -j "${cleanLink}"`
+    ));
+  } catch (err) {
+    console.error("yt-dlp JSON info extraction failed:", err);
+    throw new Error("yt-dlp JSON info extraction failed: " + err.message);
+  }
 
   const jsonData = JSON.parse(stdout);
 
@@ -61,9 +96,14 @@ const downloadVideoWithAudio = async (youtubeLink, outputFile) => {
   const formatSelection = `${bestVideo.id}+${bestAudio.id}`;
   const safeLink = youtubeLink.split("&")[0];
 
-  await execAsync(
-    `yt-dlp --cookies /app/cookies.txt --merge-output-format mp4 -f ${formatSelection} -o ${outputFile} "${safeLink}"`
-  );
+  try {
+    await execAsync(
+      `yt-dlp --cookies /app/cookies.txt --merge-output-format mp4 -f ${formatSelection} -o ${outputFile} "${safeLink}"`
+    );
+  } catch (err) {
+    console.error("yt-dlp download failed:", err);
+    throw new Error("yt-dlp download failed: " + err.message);
+  }
 
   console.log(`Downloaded video to ${outputFile}`);
 };
@@ -102,17 +142,30 @@ function extractYouTubeID(url) {
 const main = async () => {
   if (!VIDEO_ID || !YOUTUBE_LINK || !BUCKET_NAME) {
     console.error("Missing required environment variables.");
+    await updateVideoStatus(
+      VIDEO_ID,
+      "failed",
+      "Missing required environment variables."
+    );
     process.exit(1);
   }
 
   const youtubeId = extractYouTubeID(YOUTUBE_LINK);
   if (!youtubeId) {
     console.error("Failed to extract YouTube ID from link:", YOUTUBE_LINK);
+    await updateVideoStatus(
+      VIDEO_ID,
+      "failed",
+      "Failed to extract YouTube ID from link"
+    );
     process.exit(1);
   }
 
   const outputFile = `${youtubeId}.mp4`;
   const s3Key = `videos/by_youtube_id/${youtubeId}.mp4`;
+
+  // Set status to processing
+  await updateVideoStatus(VIDEO_ID, "processing");
 
   try {
     await downloadVideoWithAudio(YOUTUBE_LINK, outputFile);
@@ -120,9 +173,22 @@ const main = async () => {
     deleteFile(outputFile);
 
     console.log("Video processing complete.");
+    await updateVideoStatus(VIDEO_ID, "done");
     process.exit(0);
   } catch (error) {
     console.error("Error during processing:", error);
+    try {
+      await updateVideoStatus(
+        VIDEO_ID,
+        "failed",
+        error?.message ? String(error.message) : "Unknown error"
+      );
+    } catch (dynamoError) {
+      console.error(
+        "Failed to update DynamoDB status after processing error:",
+        dynamoError
+      );
+    }
     process.exit(1);
   }
 };
