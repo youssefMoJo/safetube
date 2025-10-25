@@ -116,7 +116,7 @@ resource "aws_iam_policy" "safetube_task_permissions" {
     Statement = [
       {
         Effect   = "Allow",
-        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"],
+        Action   = ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"],
         Resource = "*"  
       },
       {

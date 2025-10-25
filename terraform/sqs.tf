@@ -1,3 +1,7 @@
+resource "aws_sqs_queue" "video_dlq" {
+  name = "video_dlq"
+}
+
 resource "aws_sqs_queue" "video_processing_queue" {
   name                       = "SafeTube-VideoProcessingQueue"
   visibility_timeout_seconds = 300      # 5 minutes — enough time to process a video
@@ -9,4 +13,10 @@ resource "aws_sqs_queue" "video_processing_queue" {
     Project = "SafeTube"
     Environment = "prod"
   }
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.video_dlq.arn
+    maxReceiveCount     = 3
+  })
 }
+

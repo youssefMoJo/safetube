@@ -3,6 +3,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import fs from "fs";
 import { DynamoDBClient, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 
 const execAsync = promisify(exec);
 
@@ -11,6 +12,8 @@ const BUCKET_NAME = process.env.S3_BUCKET_NAME;
 const VIDEO_ID = process.env.VIDEO_ID;
 const YOUTUBE_LINK = process.env.YOUTUBE_LINK;
 const DYNAMO_VIDEOS_TABLE = process.env.DYNAMO_VIDEOS_TABLE;
+const RETRY_COUNT = parseInt(process.env.RETRY_COUNT || "0", 10);
+const MAX_RETRIES = 1;
 
 const s3 = new S3Client({ region: REGION });
 const dynamo = new DynamoDBClient({ region: REGION });
@@ -183,11 +186,34 @@ const main = async () => {
         "failed",
         error?.message ? String(error.message) : "Unknown error"
       );
-    } catch (dynamoError) {
-      console.error(
-        "Failed to update DynamoDB status after processing error:",
-        dynamoError
-      );
+
+      const sqs = new SQSClient({ region: REGION });
+      const currentRetry = RETRY_COUNT;
+      if (currentRetry < MAX_RETRIES) {
+        console.log(
+          `Retrying video ${VIDEO_ID}, attempt ${
+            currentRetry + 1
+          }/${MAX_RETRIES}`
+        );
+        const params = {
+          QueueUrl: process.env.SQS_QUEUE_URL,
+          MessageBody: JSON.stringify({
+            video_id: VIDEO_ID,
+            youtube_link: YOUTUBE_LINK,
+            dynamo_videos_table: DYNAMO_VIDEOS_TABLE,
+            retry_count: currentRetry + 1,
+          }),
+        };
+        await sqs.send(new SendMessageCommand(params));
+        await updateVideoStatus(VIDEO_ID, "retrying");
+      } else {
+        console.log(
+          `Max retries reached for ${VIDEO_ID}. Marking as permanently failed.`
+        );
+        await updateVideoStatus(VIDEO_ID, "failed_permanent");
+      }
+    } catch (requeueError) {
+      console.error("Failed to requeue message:", requeueError);
     }
     process.exit(1);
   }
