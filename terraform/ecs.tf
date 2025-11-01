@@ -28,6 +28,10 @@ resource "aws_ecs_task_definition" "safetube_task" {
         {
           name  = "AWS_REGION"
           value = var.aws_region
+        },
+        {
+          name  = "VIDEO_DLQ_URL"
+          value = aws_sqs_queue.video_dlq.id
         }
       ],
       logConfiguration = {

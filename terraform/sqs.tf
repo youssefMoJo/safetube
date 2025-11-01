@@ -16,7 +16,7 @@ resource "aws_sqs_queue" "video_processing_queue" {
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.video_dlq.arn
-    maxReceiveCount     = 3
+    maxReceiveCount     = 2
   })
 }
 

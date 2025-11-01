@@ -115,7 +115,7 @@ export const handler = async (event) => {
         youtube_link: metadata.youtube_link,
         uploaded_by: metadata.uploaded_by,
         dynamo_videos_table: VIDEOS_TABLE,
-        retry_count: 0,
+        retry_count: 2,
       }),
     };
     await sqsClient.send(new SendMessageCommand(sendMessageParams));

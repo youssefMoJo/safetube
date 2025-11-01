@@ -18,25 +18,46 @@ const MAX_RETRIES = 1;
 const s3 = new S3Client({ region: REGION });
 const dynamo = new DynamoDBClient({ region: REGION });
 // Helper to update DynamoDB status
-async function updateVideoStatus(videoId, status, errorMessage = null) {
+async function updateVideoStatus(
+  videoId,
+  status,
+  errorMessage = null,
+  retryCount = null
+) {
   if (!DYNAMO_VIDEOS_TABLE || !videoId) return;
+  let updateExpression = "";
+  let expressionAttributeNames = {
+    "#s": "status",
+  };
+  let expressionAttributeValues = {
+    ":s": { S: status },
+  };
+
+  if (errorMessage) {
+    updateExpression = "SET #s = :s, #err = :e, #rc = :rc, #lf = :lf";
+    expressionAttributeNames["#err"] = "error";
+    expressionAttributeNames["#rc"] = "retry_count";
+    expressionAttributeNames["#lf"] = "last_failed_at";
+    expressionAttributeValues[":e"] = { S: errorMessage };
+    expressionAttributeValues[":rc"] = {
+      N: retryCount !== null ? retryCount.toString() : "0",
+    };
+    expressionAttributeValues[":lf"] = { S: new Date().toISOString() };
+  } else {
+    updateExpression = "SET #s = :s REMOVE #err, #rc, #lf";
+    expressionAttributeNames["#err"] = "error";
+    expressionAttributeNames["#rc"] = "retry_count";
+    expressionAttributeNames["#lf"] = "last_failed_at";
+  }
+
   const params = {
     TableName: DYNAMO_VIDEOS_TABLE,
     Key: { video_id: { S: videoId } },
-    UpdateExpression: errorMessage
-      ? "SET #s = :s, #err = :e"
-      : "SET #s = :s REMOVE #err",
-    ExpressionAttributeNames: {
-      "#s": "status",
-      "#err": "error",
-    },
-    ExpressionAttributeValues: {
-      ":s": { S: status },
-    },
+    UpdateExpression: updateExpression,
+    ExpressionAttributeNames: expressionAttributeNames,
+    ExpressionAttributeValues: expressionAttributeValues,
   };
-  if (errorMessage) {
-    params.ExpressionAttributeValues[":e"] = { S: errorMessage };
-  }
+
   try {
     await dynamo.send(new UpdateItemCommand(params));
   } catch (err) {
@@ -148,7 +169,8 @@ const main = async () => {
     await updateVideoStatus(
       VIDEO_ID,
       "failed",
-      "Missing required environment variables."
+      "Missing required environment variables.",
+      RETRY_COUNT
     );
     process.exit(1);
   }
@@ -159,7 +181,8 @@ const main = async () => {
     await updateVideoStatus(
       VIDEO_ID,
       "failed",
-      "Failed to extract YouTube ID from link"
+      "Failed to extract YouTube ID from link",
+      RETRY_COUNT
     );
     process.exit(1);
   }
@@ -168,7 +191,7 @@ const main = async () => {
   const s3Key = `videos/by_youtube_id/${youtubeId}.mp4`;
 
   // Set status to processing
-  await updateVideoStatus(VIDEO_ID, "processing");
+  await updateVideoStatus(VIDEO_ID, "processing", null, RETRY_COUNT);
 
   try {
     await downloadVideoWithAudio(YOUTUBE_LINK, outputFile);
@@ -176,7 +199,7 @@ const main = async () => {
     deleteFile(outputFile);
 
     console.log("Video processing complete.");
-    await updateVideoStatus(VIDEO_ID, "done");
+    await updateVideoStatus(VIDEO_ID, "done", null, RETRY_COUNT);
     process.exit(0);
   } catch (error) {
     console.error("Error during processing:", error);
@@ -184,7 +207,8 @@ const main = async () => {
       await updateVideoStatus(
         VIDEO_ID,
         "failed",
-        error?.message ? String(error.message) : "Unknown error"
+        error?.message ? String(error.message) : "Unknown error",
+        RETRY_COUNT
       );
 
       const sqs = new SQSClient({ region: REGION });
@@ -205,12 +229,33 @@ const main = async () => {
           }),
         };
         await sqs.send(new SendMessageCommand(params));
-        await updateVideoStatus(VIDEO_ID, "retrying");
+        await updateVideoStatus(VIDEO_ID, "retrying", null, currentRetry + 1);
       } else {
         console.log(
-          `Max retries reached for ${VIDEO_ID}. Marking as permanently failed.`
+          `Max retries reached for ${VIDEO_ID}. Sending to DLQ and marking as permanently failed.`
         );
-        await updateVideoStatus(VIDEO_ID, "failed_permanent");
+        try {
+          const dlqParams = {
+            QueueUrl: process.env.VIDEO_DLQ_URL,
+            MessageBody: JSON.stringify({
+              video_id: VIDEO_ID,
+              youtube_link: YOUTUBE_LINK,
+              dynamo_videos_table: DYNAMO_VIDEOS_TABLE,
+              final_status: "failed_permanent",
+            }),
+          };
+          await sqs.send(new SendMessageCommand(dlqParams));
+          console.log(`Sent ${VIDEO_ID} to DLQ.`);
+        } catch (dlqError) {
+          console.error("Failed to send to DLQ:", dlqError);
+        }
+
+        await updateVideoStatus(
+          VIDEO_ID,
+          "failed_permanent",
+          null,
+          RETRY_COUNT
+        );
       }
     } catch (requeueError) {
       console.error("Failed to requeue message:", requeueError);
