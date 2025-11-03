@@ -67,69 +67,17 @@ async function updateVideoStatus(
 
 const downloadVideoWithAudio = async (youtubeLink, outputFile) => {
   const cleanLink = youtubeLink.split("&")[0];
-  let stdout;
-  try {
-    ({ stdout } = await execAsync(
-      `yt-dlp --cookies /app/cookies.txt -j "${cleanLink}"`
-    ));
-  } catch (err) {
-    console.error("yt-dlp JSON info extraction failed:", err);
-    throw new Error("yt-dlp JSON info extraction failed: " + err.message);
-  }
-
-  const jsonData = JSON.parse(stdout);
-
-  const formats = jsonData.formats.map((format) => ({
-    id: format.format_id,
-    resolution: format.height ? `${format.height}p` : "audio",
-    vcodec: format.vcodec,
-    acodec: format.acodec,
-    ext: format.ext,
-    tbr: format.tbr,
-    filesize: format.filesize,
-    format_note: format.format_note || "",
-    fps: format.fps || null,
-    url: format.url,
-    abr: format.abr || null,
-    protocol: format.protocol || "",
-  }));
-
-  const bestVideo = formats
-    .filter(
-      (f) =>
-        f.vcodec !== "none" &&
-        f.ext === "mp4" &&
-        !f.format_note.includes("webm")
-    )
-    .sort((a, b) => (b.tbr || 0) - (a.tbr || 0))[0];
-
-  const bestAudio = formats
-    .filter(
-      (f) => f.vcodec === "none" && f.acodec !== "none" && f.ext === "m4a"
-    )
-    .sort((a, b) => (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0))[0];
-
-  if (!bestVideo || !bestAudio) {
-    throw new Error("No suitable video/audio format found.");
-  }
-
-  console.log(
-    `Selected formats - Video: ${bestVideo.id}, Audio: ${bestAudio.id}`
-  );
-
-  const formatSelection = `${bestVideo.id}+${bestAudio.id}`;
-  const safeLink = youtubeLink.split("&")[0];
 
   try {
     await execAsync(
-      `yt-dlp --cookies /app/cookies.txt --merge-output-format mp4 -f ${formatSelection} -o ${outputFile} "${safeLink}"`
+      `yt-dlp --cookies /app/cookies.txt -x --audio-format mp3 -o ${outputFile} "${cleanLink}"`
     );
   } catch (err) {
-    console.error("yt-dlp download failed:", err);
-    throw new Error("yt-dlp download failed: " + err.message);
+    console.error("yt-dlp audio download failed:", err);
+    throw new Error("yt-dlp audio download failed: " + err.message);
   }
 
-  console.log(`Downloaded video to ${outputFile}`);
+  console.log(`Downloaded audio to ${outputFile}`);
 };
 
 const uploadToS3 = async (filePath, bucket, key) => {
@@ -187,8 +135,8 @@ const main = async () => {
     process.exit(1);
   }
 
-  const outputFile = `${youtubeId}.mp4`;
-  const s3Key = `videos/by_youtube_id/${youtubeId}.mp4`;
+  const outputFile = `${youtubeId}.mp3`;
+  const s3Key = `audio/by_youtube_id/${youtubeId}.mp3`;
 
   // Set status to processing
   await updateVideoStatus(VIDEO_ID, "processing", null, RETRY_COUNT);
@@ -198,7 +146,7 @@ const main = async () => {
     await uploadToS3(outputFile, BUCKET_NAME, s3Key);
     deleteFile(outputFile);
 
-    console.log("Video processing complete.");
+    console.log("Audio processing complete.");
     await updateVideoStatus(VIDEO_ID, "done", null, RETRY_COUNT);
     process.exit(0);
   } catch (error) {
