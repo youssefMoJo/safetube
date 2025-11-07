@@ -32,7 +32,11 @@ resource "aws_ecs_task_definition" "safetube_task" {
         {
           name  = "VIDEO_DLQ_URL"
           value = aws_sqs_queue.video_dlq.id
-        }
+        },
+        { name = "TRANSCRIBE_OUTPUT_BUCKET", value = aws_s3_bucket.transcribe_output_bucket.bucket },
+        { name = "COOKIES_BUCKET", value = aws_s3_bucket.cookies_bucket.bucket },
+        { name = "COOKIES_KEY", value = "cookies.txt" }
+
       ],
       logConfiguration = {
         logDriver = "awslogs",
