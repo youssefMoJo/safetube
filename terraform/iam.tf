@@ -1,3 +1,30 @@
+resource "aws_iam_policy" "ecs_task_transcribe_s3_policy" {
+  name = "safetube-ecs-task-transcribe-s3-policy"
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "transcribe:StartTranscriptionJob",
+          "transcribe:GetTranscriptionJob"
+        ],
+        Resource = "*"
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:ListBucket"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role" "lambda_exec_role" {
   name = "safetube_lambda_exec_role"
 
@@ -121,7 +148,7 @@ resource "aws_iam_policy" "safetube_task_permissions" {
       },
       {
         Effect   = "Allow",
-        Action   = ["s3:PutObject"],
+        Action   = ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"], 
         Resource = "arn:aws:s3:::${aws_s3_bucket.videos_bucket.bucket}/*"
       },
       {
@@ -153,7 +180,44 @@ resource "aws_iam_role_policy" "ecs_task_dynamodb_policy" {
   })
 }
 
+resource "aws_iam_role_policy" "ecs_processor_code_policy" {
+  name = "ecs-processor-code-policy"
+  role = aws_iam_role.ecs_task_role.id
+
+  policy = jsonencode({
+    Version: "2012-10-17",
+    Statement: [
+      {
+        Effect: "Allow",
+        Action: ["s3:GetObject"],
+        Resource: ["${aws_s3_bucket.processor_code_bucket.arn}/*"]
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "ecs_cookies_policy" {
+  name = "ecs-cookies-policy"
+  role = aws_iam_role.ecs_task_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement: [
+      {
+        Effect: "Allow",
+        Action: ["s3:GetObject"],
+        Resource: ["${aws_s3_bucket.cookies_bucket.arn}/*"]
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role_policy_attachment" "attach_task_permissions" {
   role       = aws_iam_role.ecs_task_role.name
   policy_arn = aws_iam_policy.safetube_task_permissions.arn
+}
+
+resource "aws_iam_role_policy_attachment" "attach_ecs_task_transcribe_s3_policy" {
+  role       = aws_iam_role.ecs_task_role.name
+  policy_arn = aws_iam_policy.ecs_task_transcribe_s3_policy.arn
 }
