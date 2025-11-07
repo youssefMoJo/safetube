@@ -1,9 +1,24 @@
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+} from "@aws-sdk/client-s3";
 import { exec } from "child_process";
 import { promisify } from "util";
 import fs from "fs";
-import { DynamoDBClient, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import {
+  DynamoDBClient,
+  UpdateItemCommand,
+  PutItemCommand,
+} from "@aws-sdk/client-dynamodb";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
+import {
+  TranscribeClient,
+  StartTranscriptionJobCommand,
+  GetTranscriptionJobCommand,
+} from "@aws-sdk/client-transcribe";
+import path from "path";
 
 const execAsync = promisify(exec);
 
@@ -13,7 +28,10 @@ const VIDEO_ID = process.env.VIDEO_ID;
 const YOUTUBE_LINK = process.env.YOUTUBE_LINK;
 const DYNAMO_VIDEOS_TABLE = process.env.DYNAMO_VIDEOS_TABLE;
 const RETRY_COUNT = parseInt(process.env.RETRY_COUNT || "0", 10);
-const MAX_RETRIES = 1;
+const MAX_RETRIES = 0;
+
+const transcribe = new TranscribeClient({ region: REGION });
+const TRANSCRIBE_OUTPUT_BUCKET = process.env.TRANSCRIBE_OUTPUT_BUCKET;
 
 const s3 = new S3Client({ region: REGION });
 const dynamo = new DynamoDBClient({ region: REGION });
@@ -67,10 +85,11 @@ async function updateVideoStatus(
 
 const downloadVideoWithAudio = async (youtubeLink, outputFile) => {
   const cleanLink = youtubeLink.split("&")[0];
+  const cookiesPath = await downloadCookiesFromS3();
 
   try {
     await execAsync(
-      `yt-dlp --cookies /app/cookies.txt -x --audio-format mp3 -o ${outputFile} "${cleanLink}"`
+      `yt-dlp --cookies ${cookiesPath} -x --audio-format mp3 -o ${outputFile} "${youtubeLink}"`
     );
   } catch (err) {
     console.error("yt-dlp audio download failed:", err);
@@ -111,6 +130,110 @@ function extractYouTubeID(url) {
   return null;
 }
 
+async function startTranscription(jobName, mediaUri) {
+  const params = {
+    TranscriptionJobName: jobName,
+    LanguageCode: "en-US",
+    MediaFormat: "mp3",
+    Media: {
+      MediaFileUri: mediaUri,
+    },
+    OutputBucketName: TRANSCRIBE_OUTPUT_BUCKET,
+  };
+
+  try {
+    await transcribe.send(new StartTranscriptionJobCommand(params));
+    console.log(`Started transcription job: ${jobName}`);
+  } catch (err) {
+    console.error("Failed to start transcription job:", err);
+    throw err;
+  }
+}
+
+async function waitForTranscription(jobName) {
+  while (true) {
+    const data = await transcribe.send(
+      new GetTranscriptionJobCommand({ TranscriptionJobName: jobName })
+    );
+    const job = data.TranscriptionJob;
+    if (job.TranscriptionJobStatus === "COMPLETED") {
+      console.log(`Transcription job ${jobName} completed.`);
+      return job.Transcript.TranscriptFileUri;
+    } else if (job.TranscriptionJobStatus === "FAILED") {
+      throw new Error(`Transcription job ${jobName} failed.`);
+    } else {
+      console.log(`Waiting for transcription job ${jobName}...`);
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
+}
+
+const downloadCookiesFromS3 = async () => {
+  const bucket = process.env.COOKIES_BUCKET;
+  const key = process.env.COOKIES_KEY;
+  const tempPath = path.join("/tmp", "cookies.txt");
+
+  const data = await s3.send(
+    new GetObjectCommand({ Bucket: bucket, Key: key })
+  );
+
+  const streamToString = (stream) =>
+    new Promise((resolve, reject) => {
+      const chunks = [];
+      stream.on("data", (chunk) => chunks.push(chunk));
+      stream.on("error", reject);
+      stream.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+    });
+
+  const content = await streamToString(data.Body);
+  fs.writeFileSync(tempPath, content);
+  console.log(`Downloaded cookies file to ${tempPath}`);
+  return tempPath;
+};
+
+const saveTranscriptToS3 = async (videoId, transcriptJson) => {
+  try {
+    const key = `${videoId}.json`;
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: TRANSCRIBE_OUTPUT_BUCKET,
+        Key: key,
+        Body: JSON.stringify(transcriptJson, null, 2),
+        ContentType: "application/json",
+      })
+    );
+    console.log(
+      `Saved transcript to S3 bucket ${TRANSCRIBE_OUTPUT_BUCKET} with key ${key}`
+    );
+    return key;
+  } catch (err) {
+    console.error("Failed to save transcript to S3:", err);
+    throw err;
+  }
+};
+
+const saveTranscriptToDynamoDB = async (videoId, transcriptS3Key) => {
+  if (!DYNAMO_VIDEOS_TABLE || !videoId) return;
+
+  const params = {
+    TableName: DYNAMO_VIDEOS_TABLE,
+    Key: { video_id: { S: videoId } },
+    UpdateExpression:
+      "SET transcript_s3_key = :key, transcript_saved_at = :time",
+    ExpressionAttributeValues: {
+      ":key": { S: transcriptS3Key },
+      ":time": { S: new Date().toISOString() },
+    },
+  };
+
+  try {
+    await dynamo.send(new UpdateItemCommand(params));
+    console.log(`Updated transcript info in DynamoDB for video ${videoId}`);
+  } catch (err) {
+    console.error("Failed to update transcript info in DynamoDB:", err);
+  }
+};
+
 const main = async () => {
   if (!VIDEO_ID || !YOUTUBE_LINK || !BUCKET_NAME) {
     console.error("Missing required environment variables.");
@@ -144,9 +267,36 @@ const main = async () => {
   try {
     await downloadVideoWithAudio(YOUTUBE_LINK, outputFile);
     await uploadToS3(outputFile, BUCKET_NAME, s3Key);
+
+    const timestamp = Date.now();
+    const transcriptS3Key = `transcription-${youtubeId}-${timestamp}.json`;
+    const jobName = `transcription-${youtubeId}-${timestamp}`; // unique job name for Transcribe
+    const mediaUri = `s3://${BUCKET_NAME}/${s3Key}`;
+    await startTranscription(jobName, mediaUri);
+
+    // Wait for transcription to complete
+    const transcriptUri = await waitForTranscription(jobName);
+
+    // Save transcript S3 key to DynamoDB
+    await saveTranscriptToDynamoDB(VIDEO_ID, transcriptS3Key);
+
+    // Clean up local files
     deleteFile(outputFile);
 
-    console.log("Audio processing complete.");
+    // Clean up uploaded audio from S3
+    try {
+      await s3.send(
+        new DeleteObjectCommand({
+          Bucket: BUCKET_NAME,
+          Key: s3Key,
+        })
+      );
+      console.log(`Deleted audio from S3: ${s3Key}`);
+    } catch (err) {
+      console.error(`Failed to delete audio from S3: ${s3Key}`, err);
+    }
+
+    console.log("Audio processing and transcription complete.");
     await updateVideoStatus(VIDEO_ID, "done", null, RETRY_COUNT);
     process.exit(0);
   } catch (error) {
