@@ -5,9 +5,6 @@ resource "aws_lambda_function" "process_video" {
   handler = "index.handler"
   runtime = "nodejs20.x"
 
-  # s3_bucket = "safetube-lambda-deployments"
-  # s3_key    = "processVideo.zip"
-
   filename         = "${path.module}/../lambda/processVideo/processVideo.zip"
   source_code_hash = filebase64sha256("${path.module}/../lambda/processVideo/processVideo.zip")
 
