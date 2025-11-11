@@ -19,6 +19,85 @@ import {
   GetTranscriptionJobCommand,
 } from "@aws-sdk/client-transcribe";
 import path from "path";
+import axios from "axios";
+const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
+// Generate AI insights from transcript text using RapidAPI ChatGPT endpoint
+// Generate AI insights from transcript text using RapidAPI ChatGPT endpoint
+async function generateInsightsFromTranscript(transcriptText) {
+  if (!transcriptText || transcriptText.length === 0) return null;
+
+  try {
+    const messages = [
+      {
+        role: "system",
+        content:
+          "You are an expert knowledge extractor and life coach. Extract the most important insights, lessons, and practical tips from user-provided transcripts.",
+      },
+      {
+        role: "user",
+        content: `Here is the transcript of a video:\n\n${transcriptText}\n\nPlease provide a structured JSON output with keys: "lessons" (array), "examples" (array), "tips" (array).`,
+      },
+    ];
+
+    const response = await axios.post(
+      "https://chatgpt-api8.p.rapidapi.com/",
+      messages,
+      {
+        headers: {
+          "x-rapidapi-key": RAPIDAPI_KEY,
+          "x-rapidapi-host": "chatgpt-api8.p.rapidapi.com",
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    // Extract the most likely text field from RapidAPI response
+    const aiOutput =
+      response.data?.text ||
+      response.data?.choices?.[0]?.message?.content ||
+      response.data?.choices?.[0]?.text ||
+      JSON.stringify(response.data);
+
+    // Clean markdown or extra formatting
+    let cleaned = aiOutput
+      .replace(/```json|```/gi, "")
+      .replace(/^\s+|\s+$/g, "")
+      .trim();
+
+    // Try parsing as JSON
+    try {
+      const parsed = JSON.parse(cleaned);
+      return parsed;
+    } catch (parseErr) {
+      console.warn("AI output not valid JSON, returning cleaned text instead.");
+      return { raw_text: cleaned };
+    }
+  } catch (err) {
+    console.error("Failed to generate insights from AI:", err);
+    return null;
+  }
+}
+
+// Save insights JSON to DynamoDB under "insights" field
+async function saveInsightsToDynamoDB(videoId, insightsJson) {
+  if (!DYNAMO_VIDEOS_TABLE || !videoId || !insightsJson) return;
+
+  const params = {
+    TableName: DYNAMO_VIDEOS_TABLE,
+    Key: { video_id: { S: videoId } },
+    UpdateExpression: "SET insights = :i",
+    ExpressionAttributeValues: {
+      ":i": { S: JSON.stringify(insightsJson) },
+    },
+  };
+
+  try {
+    await dynamo.send(new UpdateItemCommand(params));
+    console.log(`Saved AI insights to DynamoDB for video ${videoId}`);
+  } catch (err) {
+    console.error("Failed to save AI insights to DynamoDB:", err);
+  }
+}
 
 const execAsync = promisify(exec);
 
@@ -279,6 +358,88 @@ const main = async () => {
 
     // Save transcript S3 key to DynamoDB
     await saveTranscriptToDynamoDB(VIDEO_ID, transcriptS3Key);
+
+    // === AI Insights Generation Step ===
+    try {
+      // Download transcript file from S3 output bucket
+      const transcriptFilePath = path.join("/tmp", transcriptS3Key);
+      const transcriptObj = await s3.send(
+        new GetObjectCommand({
+          Bucket: TRANSCRIBE_OUTPUT_BUCKET,
+          Key: transcriptS3Key,
+        })
+      );
+      const streamToString = (stream) =>
+        new Promise((resolve, reject) => {
+          const chunks = [];
+          stream.on("data", (chunk) => chunks.push(chunk));
+          stream.on("error", reject);
+          stream.on("end", () =>
+            resolve(Buffer.concat(chunks).toString("utf-8"))
+          );
+        });
+      const transcriptContent = await streamToString(transcriptObj.Body);
+      const transcriptJson = JSON.parse(transcriptContent);
+      const transcriptText =
+        transcriptJson.results &&
+        transcriptJson.results.transcripts &&
+        transcriptJson.results.transcripts[0]
+          ? transcriptJson.results.transcripts[0].transcript
+          : "";
+
+      if (transcriptText && transcriptText.length > 0) {
+        const insightsRaw = await generateInsightsFromTranscript(
+          transcriptText
+        );
+
+        // Extract structured JSON from AI response
+        let insightsJson;
+        if (insightsRaw?.raw?.text) {
+          try {
+            insightsJson = JSON.parse(insightsRaw.raw.text);
+          } catch {
+            insightsJson = insightsRaw; // fallback to raw
+          }
+        } else {
+          insightsJson = insightsRaw;
+        }
+
+        if (insightsJson) {
+          const insightsFileKey = `insights-${youtubeId}-${timestamp}.json`;
+          await s3.send(
+            new PutObjectCommand({
+              Bucket: TRANSCRIBE_OUTPUT_BUCKET,
+              Key: insightsFileKey,
+              Body: JSON.stringify(insightsJson, null, 2),
+              ContentType: "application/json",
+            })
+          );
+          console.log(`Saved insights JSON to S3: ${insightsFileKey}`);
+
+          const params = {
+            TableName: DYNAMO_VIDEOS_TABLE,
+            Key: { video_id: { S: VIDEO_ID } },
+            UpdateExpression:
+              "SET insights_s3_key = :key, insights_saved_at = :time",
+            ExpressionAttributeValues: {
+              ":key": { S: insightsFileKey },
+              ":time": { S: new Date().toISOString() },
+            },
+          };
+          await dynamo.send(new UpdateItemCommand(params));
+          console.log(
+            `Updated DynamoDB with insights key for video ${VIDEO_ID}`
+          );
+        }
+      } else {
+        console.warn(
+          "Transcript text is empty, skipping AI insights generation."
+        );
+      }
+    } catch (err) {
+      console.error("Error generating or saving AI insights:", err);
+    }
+    // === End AI Insights Generation Step ===
 
     // Clean up local files
     deleteFile(outputFile);

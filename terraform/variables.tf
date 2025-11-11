@@ -27,3 +27,8 @@ variable "subnet_ids" {
 variable "security_group_id" {
   description = "Security group ID for ECS tasks"
 }
+
+variable "RAPIDAPI_KEY" {
+  description = "X-RapidAPI-Key"
+  type        = string
+}
