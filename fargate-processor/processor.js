@@ -24,7 +24,9 @@ const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
 
 // Generate AI insights from transcript text using RapidAPI ChatGPT endpoint
 async function generateInsightsFromTranscript(transcriptText) {
-  if (!transcriptText || transcriptText.length === 0) return null;
+  if (!transcriptText || transcriptText.length === 0) {
+    throw new Error("Transcript text is empty; cannot generate AI insights.");
+  }
 
   try {
     // Master prompt for structured, actionable, standardized insights
@@ -101,7 +103,7 @@ async function generateInsightsFromTranscript(transcriptText) {
     // Robust response checks
     if (!response || !response.data) {
       console.error("AI response missing data field:", response);
-      return { error: "Invalid AI response" };
+      throw new Error("Invalid AI response (missing data)");
     }
 
     // Extract text from RapidAPI response
@@ -117,13 +119,17 @@ async function generateInsightsFromTranscript(transcriptText) {
       .replace(/^\s+|\s+$/g, "")
       .trim();
 
+    if (!cleaned || cleaned.length === 0) {
+      throw new Error("AI response is empty");
+    }
+
     // Parse as JSON, fallback to raw text if invalid
     let parsed;
     try {
       parsed = JSON.parse(cleaned);
     } catch (parseErr) {
       console.warn("AI output not valid JSON, returning cleaned text instead.");
-      return { raw_text: cleaned };
+      throw new Error("AI output not valid JSON");
     }
 
     // Final formatting: prettify, trim trailing whitespace
@@ -131,7 +137,7 @@ async function generateInsightsFromTranscript(transcriptText) {
     return JSON.parse(prettified);
   } catch (err) {
     console.error("Failed to generate insights from AI:", err);
-    return { error: "Invalid AI response" };
+    throw err;
   }
 }
 
@@ -467,170 +473,133 @@ const main = async () => {
     await saveTranscriptToDynamoDB(VIDEO_ID, transcriptS3Key);
 
     // === AI Insights Generation Step ===
-    try {
-      // Download transcript file from S3 output bucket
-      const transcriptFilePath = path.join("/tmp", transcriptS3Key);
-      const transcriptObj = await s3.send(
-        new GetObjectCommand({
-          Bucket: TRANSCRIBE_OUTPUT_BUCKET,
-          Key: transcriptS3Key,
-        })
-      );
-      const streamToString = (stream) =>
-        new Promise((resolve, reject) => {
-          const chunks = [];
-          stream.on("data", (chunk) => chunks.push(chunk));
-          stream.on("error", reject);
-          stream.on("end", () =>
-            resolve(Buffer.concat(chunks).toString("utf-8"))
-          );
-        });
-      const transcriptContent = await streamToString(transcriptObj.Body);
-      const transcriptJson = JSON.parse(transcriptContent);
-      const transcriptText =
-        transcriptJson.results &&
-        transcriptJson.results.transcripts &&
-        transcriptJson.results.transcripts[0]
-          ? transcriptJson.results.transcripts[0].transcript
-          : "";
-
-      if (transcriptText && transcriptText.length > 0) {
-        const insightsRaw = await generateInsightsFromTranscript(
-          transcriptText
+    // Download transcript file from S3 output bucket
+    const transcriptFilePath = path.join("/tmp", transcriptS3Key);
+    const transcriptObj = await s3.send(
+      new GetObjectCommand({
+        Bucket: TRANSCRIBE_OUTPUT_BUCKET,
+        Key: transcriptS3Key,
+      })
+    );
+    const streamToString = (stream) =>
+      new Promise((resolve, reject) => {
+        const chunks = [];
+        stream.on("data", (chunk) => chunks.push(chunk));
+        stream.on("error", reject);
+        stream.on("end", () =>
+          resolve(Buffer.concat(chunks).toString("utf-8"))
         );
+      });
+    const transcriptContent = await streamToString(transcriptObj.Body);
+    const transcriptJson = JSON.parse(transcriptContent);
+    const transcriptText =
+      transcriptJson.results &&
+      transcriptJson.results.transcripts &&
+      transcriptJson.results.transcripts[0]
+        ? transcriptJson.results.transcripts[0].transcript
+        : "";
 
-        // Extract structured JSON from AI response
-        let insightsJson;
-        if (insightsRaw?.raw?.text) {
-          try {
-            insightsJson = JSON.parse(insightsRaw.raw.text);
-          } catch {
-            insightsJson = insightsRaw; // fallback to raw
-          }
-        } else {
-          insightsJson = insightsRaw;
-        }
-
-        // === Normalization Step ===
-        function normalizeInsights(input) {
-          if (!input || typeof input !== "object")
-            return { lessons: [], examples: [], tips: [] };
-
-          const normalized = {
-            lessons: [],
-            examples: Array.isArray(input.examples) ? input.examples : [],
-            tips: Array.isArray(input.tips) ? input.tips : [],
-          };
-
-          if (Array.isArray(input.lessons)) {
-            normalized.lessons = input.lessons.map((lesson) => ({
-              title:
-                lesson.title ||
-                lesson.lesson ||
-                lesson.key ||
-                lesson.key_insight ||
-                "",
-              summary: lesson.summary || lesson.details || "",
-              detailed_explanation:
-                lesson.detailed_explanation || lesson.details || "",
-              action_steps: Array.isArray(lesson.action_steps)
-                ? lesson.action_steps
-                : Array.isArray(lesson.tips)
-                ? lesson.tips
-                : lesson.action_step
-                ? [lesson.action_step]
-                : [],
-              examples: Array.isArray(lesson.examples) ? lesson.examples : [],
-            }));
-          }
-
-          // Ensure all keys exist
-          if (!normalized.quotes)
-            normalized.quotes = Array.isArray(input.quotes) ? input.quotes : [];
-          if (!normalized.mindset_shifts)
-            normalized.mindset_shifts = Array.isArray(input.mindset_shifts)
-              ? input.mindset_shifts
-              : [];
-          if (!normalized.reflection_questions)
-            normalized.reflection_questions = Array.isArray(
-              input.reflection_questions
-            )
-              ? input.reflection_questions
-              : [];
-          if (!normalized.mistakes_or_warnings)
-            normalized.mistakes_or_warnings = Array.isArray(
-              input.mistakes_or_warnings
-            )
-              ? input.mistakes_or_warnings
-              : [];
-          if (!normalized.personal_insights)
-            normalized.personal_insights = Array.isArray(
-              input.personal_insights
-            )
-              ? input.personal_insights
-              : [];
-          if (!normalized.emotional_tone)
-            normalized.emotional_tone = input.emotional_tone || "";
-          if (!normalized.category) normalized.category = input.category || "";
-          if (!normalized.tags)
-            normalized.tags = Array.isArray(input.tags) ? input.tags : [];
-
-          return normalized;
-        }
-
-        // Normalize the AI output
-        insightsJson = normalizeInsights(insightsJson);
-
-        if (insightsJson) {
-          const valid = validateInsightsJson(insightsJson);
-          let normalizedInsightsToSave = insightsJson;
-          if (!valid) {
-            console.warn(
-              "AI insights failed validation, saving as JSON string fallback."
-            );
-            normalizedInsightsToSave = {
-              fallback_text: JSON.stringify(insightsJson),
-            };
-          }
-
-          // Save normalized JSON to -normalized.json key
-          const normalizedInsightsFileKey = `insights-${youtubeId}-${timestamp}-normalized.json`;
-          await s3.send(
-            new PutObjectCommand({
-              Bucket: TRANSCRIBE_OUTPUT_BUCKET,
-              Key: normalizedInsightsFileKey,
-              Body: JSON.stringify(normalizedInsightsToSave, null, 2),
-              ContentType: "application/json",
-            })
-          );
-          console.log(
-            `Saved normalized insights JSON to S3: ${normalizedInsightsFileKey}`
-          );
-
-          // Update DynamoDB: insights_s3_key -> normalized
-          const params = {
-            TableName: DYNAMO_VIDEOS_TABLE,
-            Key: { video_id: { S: VIDEO_ID } },
-            UpdateExpression:
-              "SET insights_s3_key = :normKey, insights_saved_at = :time",
-            ExpressionAttributeValues: {
-              ":normKey": { S: normalizedInsightsFileKey },
-              ":time": { S: new Date().toISOString() },
-            },
-          };
-          await dynamo.send(new UpdateItemCommand(params));
-          console.log(
-            `Updated DynamoDB with AI insights key for video ${VIDEO_ID}`
-          );
-        }
-      } else {
-        console.warn(
-          "Transcript text is empty, skipping AI insights generation."
-        );
-      }
-    } catch (err) {
-      console.error("Error generating or saving AI insights:", err);
+    if (!transcriptText || transcriptText.length === 0) {
+      throw new Error("Transcript text is empty, cannot generate AI insights.");
     }
+
+    // Generate AI insights from transcript
+    const aiInsights = await generateInsightsFromTranscript(transcriptText);
+
+    // === Normalization Step ===
+    function normalizeInsights(input) {
+      if (!input || typeof input !== "object")
+        return { lessons: [], examples: [], tips: [] };
+
+      const normalized = {
+        lessons: [],
+        examples: Array.isArray(input.examples) ? input.examples : [],
+        tips: Array.isArray(input.tips) ? input.tips : [],
+      };
+
+      if (Array.isArray(input.lessons)) {
+        normalized.lessons = input.lessons.map((lesson) => ({
+          title:
+            lesson.title ||
+            lesson.lesson ||
+            lesson.key ||
+            lesson.key_insight ||
+            "",
+          summary: lesson.summary || lesson.details || "",
+          detailed_explanation:
+            lesson.detailed_explanation || lesson.details || "",
+          action_steps: Array.isArray(lesson.action_steps)
+            ? lesson.action_steps
+            : Array.isArray(lesson.tips)
+            ? lesson.tips
+            : lesson.action_step
+            ? [lesson.action_step]
+            : [],
+          examples: Array.isArray(lesson.examples) ? lesson.examples : [],
+        }));
+      }
+
+      // Ensure all keys exist
+      if (!normalized.quotes)
+        normalized.quotes = Array.isArray(input.quotes) ? input.quotes : [];
+      if (!normalized.mindset_shifts)
+        normalized.mindset_shifts = Array.isArray(input.mindset_shifts)
+          ? input.mindset_shifts
+          : [];
+      if (!normalized.reflection_questions)
+        normalized.reflection_questions = Array.isArray(
+          input.reflection_questions
+        )
+          ? input.reflection_questions
+          : [];
+      if (!normalized.mistakes_or_warnings)
+        normalized.mistakes_or_warnings = Array.isArray(
+          input.mistakes_or_warnings
+        )
+          ? input.mistakes_or_warnings
+          : [];
+      if (!normalized.personal_insights)
+        normalized.personal_insights = Array.isArray(input.personal_insights)
+          ? input.personal_insights
+          : [];
+      if (!normalized.emotional_tone)
+        normalized.emotional_tone = input.emotional_tone || "";
+      if (!normalized.category) normalized.category = input.category || "";
+      if (!normalized.tags)
+        normalized.tags = Array.isArray(input.tags) ? input.tags : [];
+
+      return normalized;
+    }
+
+    // Always normalize before saving
+    const normalizedInsights = normalizeInsights(aiInsights);
+
+    // Save normalized JSON to S3 with unified key
+    const insightsS3Key = `insights-${youtubeId}-${timestamp}.json`;
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: TRANSCRIBE_OUTPUT_BUCKET,
+        Key: insightsS3Key,
+        Body: JSON.stringify(normalizedInsights, null, 2),
+        ContentType: "application/json",
+      })
+    );
+    console.log(`Saved normalized AI insights JSON to S3: ${insightsS3Key}`);
+
+    // Update DynamoDB with S3 key and timestamp
+    const params = {
+      TableName: DYNAMO_VIDEOS_TABLE,
+      Key: { video_id: { S: VIDEO_ID } },
+      UpdateExpression: "SET insights_s3_key = :key, insights_saved_at = :time",
+      ExpressionAttributeValues: {
+        ":key": { S: insightsS3Key },
+        ":time": { S: new Date().toISOString() },
+      },
+    };
+    await dynamo.send(new UpdateItemCommand(params));
+    console.log(
+      `Updated DynamoDB with AI insights S3 key for video ${VIDEO_ID}`
+    );
     // === End AI Insights Generation Step ===
 
     // Clean up local files
