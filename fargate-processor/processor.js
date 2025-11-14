@@ -21,21 +21,68 @@ import {
 import path from "path";
 import axios from "axios";
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
-// Generate AI insights from transcript text using RapidAPI ChatGPT endpoint
+
 // Generate AI insights from transcript text using RapidAPI ChatGPT endpoint
 async function generateInsightsFromTranscript(transcriptText) {
   if (!transcriptText || transcriptText.length === 0) return null;
 
   try {
+    // Master prompt for structured, actionable, standardized insights
     const messages = [
       {
         role: "system",
         content:
-          "You are an expert knowledge extractor and life coach. Extract the most important insights, lessons, and practical tips from user-provided transcripts.",
+          "You are an expert knowledge extractor, learning designer, and life coach. Your job is to analyze transcripts and return highly actionable, structured, and standardized JSON insights in a consistent format for downstream systems.",
       },
       {
         role: "user",
-        content: `Here is the transcript of a video:\n\n${transcriptText}\n\nPlease provide a structured JSON output with keys: "lessons" (array), "examples" (array), "tips" (array).`,
+        content: `
+        Carefully read the following transcript. Analyze and extract deep, practical, and structured insights in the following format. Return ONLY valid, minified JSON (no markdown, no commentary, no extra text). Always include all fields, even if empty.
+
+        Format:
+        {
+          "lessons": [
+            {
+              "title": "Concise lesson title",
+              "summary": "Brief summary of the lesson.",
+              "detailed_explanation": "Expanded explanation, context, and why it matters.",
+              "action_steps": ["Actionable tip 1", "Actionable tip 2"],
+              "examples": ["Relevant quote or story from transcript", "..."]
+            }
+            // ... more lessons
+          ],
+          "quotes": [
+            "Direct impactful quote from transcript",
+            "Another quote"
+          ],
+          "mindset_shifts": [
+            "Describe any mindset or perspective shifts recommended by the speaker"
+          ],
+          "reflection_questions": [
+            "A question to help the user reflect/apply the lesson"
+          ],
+          "mistakes_or_warnings": [
+            "Common mistake or warning highlighted by the speaker"
+          ],
+          "personal_insights": [
+            "Any personal stories, opinions, or unique insights from the speaker"
+          ],
+          "emotional_tone": "Describe the overall emotional tone (e.g., motivational, cautionary, optimistic)",
+          "category": "Thematic category (e.g., productivity, relationships, health, finance)",
+          "tags": ["tag1", "tag2", "tag3"]
+        }
+
+        Instructions:
+        - Carefully extract and fill each field. Use arrays even if only one item.
+        - All JSON keys must always be present.
+        - Quotes and examples must be directly from the transcript.
+        - Action steps must be practical and specific.
+        - Do NOT include any text outside of the JSON.
+        - Always return valid JSON (no markdown, no comments, no trailing commas).
+
+        Transcript:
+        ${transcriptText}
+      `,
       },
     ];
 
@@ -51,7 +98,13 @@ async function generateInsightsFromTranscript(transcriptText) {
       }
     );
 
-    // Extract the most likely text field from RapidAPI response
+    // Robust response checks
+    if (!response || !response.data) {
+      console.error("AI response missing data field:", response);
+      return { error: "Invalid AI response" };
+    }
+
+    // Extract text from RapidAPI response
     const aiOutput =
       response.data?.text ||
       response.data?.choices?.[0]?.message?.content ||
@@ -59,22 +112,26 @@ async function generateInsightsFromTranscript(transcriptText) {
       JSON.stringify(response.data);
 
     // Clean markdown or extra formatting
-    let cleaned = aiOutput
+    const cleaned = (aiOutput || "")
       .replace(/```json|```/gi, "")
       .replace(/^\s+|\s+$/g, "")
       .trim();
 
-    // Try parsing as JSON
+    // Parse as JSON, fallback to raw text if invalid
+    let parsed;
     try {
-      const parsed = JSON.parse(cleaned);
-      return parsed;
+      parsed = JSON.parse(cleaned);
     } catch (parseErr) {
       console.warn("AI output not valid JSON, returning cleaned text instead.");
       return { raw_text: cleaned };
     }
+
+    // Final formatting: prettify, trim trailing whitespace
+    const prettified = JSON.stringify(parsed, null, 2).trim();
+    return JSON.parse(prettified);
   } catch (err) {
     console.error("Failed to generate insights from AI:", err);
-    return null;
+    return { error: "Invalid AI response" };
   }
 }
 
@@ -250,7 +307,7 @@ async function waitForTranscription(jobName) {
 const downloadCookiesFromS3 = async () => {
   const bucket = process.env.COOKIES_BUCKET;
   const key = process.env.COOKIES_KEY;
-  const tempPath = path.join("/tmp", "cookies.txt");
+  const tempPath = path.join("/tmp", "all_cookies.txt");
 
   const data = await s3.send(
     new GetObjectCommand({ Bucket: bucket, Key: key })
@@ -312,6 +369,56 @@ const saveTranscriptToDynamoDB = async (videoId, transcriptS3Key) => {
     console.error("Failed to update transcript info in DynamoDB:", err);
   }
 };
+
+// Helper to validate the structure of insights JSON
+function validateInsightsJson(insights) {
+  if (!insights || typeof insights !== "object") {
+    console.warn("Invalid insights format: not an object.");
+    return false;
+  }
+
+  // Ensure lessons/examples/tips exist
+  const hasLessons = Array.isArray(insights.lessons);
+  const hasExamples = Array.isArray(insights.examples);
+  const hasTips = Array.isArray(insights.tips);
+
+  if (!hasLessons || !hasExamples || !hasTips) {
+    console.warn(
+      "Invalid insights format: missing expected keys (lessons, examples, tips)."
+    );
+    return false;
+  }
+
+  // More flexible lesson validation (allows many field variants)
+  const lessonsValid = insights.lessons.every((lesson) => {
+    const hasTitle =
+      typeof lesson.title === "string" ||
+      typeof lesson.lesson === "string" ||
+      typeof lesson.key === "string" ||
+      typeof lesson.key_insight === "string";
+
+    const hasDetail =
+      typeof lesson.detailed_explanation === "string" ||
+      typeof lesson.details === "string" ||
+      typeof lesson.summary === "string";
+
+    const hasExamples = Array.isArray(lesson.examples);
+
+    const hasActionSteps =
+      Array.isArray(lesson.action_steps) ||
+      Array.isArray(lesson.tips) ||
+      typeof lesson.action_step === "string";
+
+    return hasTitle && hasDetail && hasExamples && hasActionSteps;
+  });
+
+  if (!lessonsValid) {
+    console.warn("Invalid lesson structure inside insights JSON.");
+    return false;
+  }
+
+  return true;
+}
 
 const main = async () => {
   if (!VIDEO_ID || !YOUTUBE_LINK || !BUCKET_NAME) {
@@ -404,31 +511,116 @@ const main = async () => {
           insightsJson = insightsRaw;
         }
 
+        // === Normalization Step ===
+        function normalizeInsights(input) {
+          if (!input || typeof input !== "object")
+            return { lessons: [], examples: [], tips: [] };
+
+          const normalized = {
+            lessons: [],
+            examples: Array.isArray(input.examples) ? input.examples : [],
+            tips: Array.isArray(input.tips) ? input.tips : [],
+          };
+
+          if (Array.isArray(input.lessons)) {
+            normalized.lessons = input.lessons.map((lesson) => ({
+              title:
+                lesson.title ||
+                lesson.lesson ||
+                lesson.key ||
+                lesson.key_insight ||
+                "",
+              summary: lesson.summary || lesson.details || "",
+              detailed_explanation:
+                lesson.detailed_explanation || lesson.details || "",
+              action_steps: Array.isArray(lesson.action_steps)
+                ? lesson.action_steps
+                : Array.isArray(lesson.tips)
+                ? lesson.tips
+                : lesson.action_step
+                ? [lesson.action_step]
+                : [],
+              examples: Array.isArray(lesson.examples) ? lesson.examples : [],
+            }));
+          }
+
+          // Ensure all keys exist
+          if (!normalized.quotes)
+            normalized.quotes = Array.isArray(input.quotes) ? input.quotes : [];
+          if (!normalized.mindset_shifts)
+            normalized.mindset_shifts = Array.isArray(input.mindset_shifts)
+              ? input.mindset_shifts
+              : [];
+          if (!normalized.reflection_questions)
+            normalized.reflection_questions = Array.isArray(
+              input.reflection_questions
+            )
+              ? input.reflection_questions
+              : [];
+          if (!normalized.mistakes_or_warnings)
+            normalized.mistakes_or_warnings = Array.isArray(
+              input.mistakes_or_warnings
+            )
+              ? input.mistakes_or_warnings
+              : [];
+          if (!normalized.personal_insights)
+            normalized.personal_insights = Array.isArray(
+              input.personal_insights
+            )
+              ? input.personal_insights
+              : [];
+          if (!normalized.emotional_tone)
+            normalized.emotional_tone = input.emotional_tone || "";
+          if (!normalized.category) normalized.category = input.category || "";
+          if (!normalized.tags)
+            normalized.tags = Array.isArray(input.tags) ? input.tags : [];
+
+          return normalized;
+        }
+
+        // Normalize the AI output
+        insightsJson = normalizeInsights(insightsJson);
+
         if (insightsJson) {
-          const insightsFileKey = `insights-${youtubeId}-${timestamp}.json`;
+          const valid = validateInsightsJson(insightsJson);
+          let normalizedInsightsToSave = insightsJson;
+          if (!valid) {
+            console.warn(
+              "AI insights failed validation, saving as JSON string fallback."
+            );
+            normalizedInsightsToSave = {
+              fallback_text: JSON.stringify(insightsJson),
+            };
+          }
+
+          // Save normalized JSON to -normalized.json key
+          const normalizedInsightsFileKey = `insights-${youtubeId}-${timestamp}-normalized.json`;
           await s3.send(
             new PutObjectCommand({
               Bucket: TRANSCRIBE_OUTPUT_BUCKET,
-              Key: insightsFileKey,
-              Body: JSON.stringify(insightsJson, null, 2),
+              Key: normalizedInsightsFileKey,
+              Body: JSON.stringify(normalizedInsightsToSave, null, 2),
               ContentType: "application/json",
             })
           );
-          console.log(`Saved insights JSON to S3: ${insightsFileKey}`);
+          console.log(
+            `Saved normalized insights JSON to S3: ${normalizedInsightsFileKey}`
+          );
 
+          // Update DynamoDB: insights_s3_key -> normalized
           const params = {
             TableName: DYNAMO_VIDEOS_TABLE,
             Key: { video_id: { S: VIDEO_ID } },
             UpdateExpression:
-              "SET insights_s3_key = :key, insights_saved_at = :time",
+              "SET insights_s3_key = :normKey, insights_saved_at = :time",
             ExpressionAttributeValues: {
-              ":key": { S: insightsFileKey },
+              ":normKey": { S: normalizedInsightsFileKey },
               ":time": { S: new Date().toISOString() },
             },
           };
           await dynamo.send(new UpdateItemCommand(params));
           console.log(
-            `Updated DynamoDB with insights key for video ${VIDEO_ID}`
+            `Updated DynamoDB with AI insights key for video ${VIDEO_ID}`
           );
         }
       } else {
