@@ -31,15 +31,3 @@ resource "aws_cognito_user_pool_client" "safetube_user_pool_client" {
 
   prevent_user_existence_errors = "ENABLED"
 }
-
-resource "aws_cognito_user_group" "parents_group" {
-  user_pool_id = aws_cognito_user_pool.safetube_user_pool.id
-  name         = "Parents"
-  description  = "Group for parent accounts"
-}
-
-resource "aws_cognito_user_group" "children_group" {
-  user_pool_id = aws_cognito_user_pool.safetube_user_pool.id
-  name         = "Children"
-  description  = "Group for child accounts"
-}
