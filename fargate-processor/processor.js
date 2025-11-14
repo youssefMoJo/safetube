@@ -20,7 +20,14 @@ import {
 } from "@aws-sdk/client-transcribe";
 import path from "path";
 import axios from "axios";
-const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
+// const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
+
+const RAPIDAPI_KEYS = [
+  process.env.RAPIDAPI_KEY_1,
+  process.env.RAPIDAPI_KEY_2,
+  process.env.RAPIDAPI_KEY_3,
+  process.env.RAPIDAPI_KEY_4,
+];
 
 // Generate AI insights from transcript text using RapidAPI ChatGPT endpoint
 async function generateInsightsFromTranscript(transcriptText) {
@@ -88,30 +95,15 @@ async function generateInsightsFromTranscript(transcriptText) {
       },
     ];
 
-    const response = await axios.post(
-      "https://chatgpt-api8.p.rapidapi.com/",
-      messages,
-      {
-        headers: {
-          "x-rapidapi-key": RAPIDAPI_KEY,
-          "x-rapidapi-host": "chatgpt-api8.p.rapidapi.com",
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    // Robust response checks
-    if (!response || !response.data) {
-      console.error("AI response missing data field:", response);
-      throw new Error("Invalid AI response (missing data)");
-    }
+    // Use the fallback mechanism for RapidAPI keys
+    const responseData = await callRapidApiWithFallback(messages);
 
     // Extract text from RapidAPI response
     const aiOutput =
-      response.data?.text ||
-      response.data?.choices?.[0]?.message?.content ||
-      response.data?.choices?.[0]?.text ||
-      JSON.stringify(response.data);
+      responseData?.text ||
+      responseData?.choices?.[0]?.message?.content ||
+      responseData?.choices?.[0]?.text ||
+      JSON.stringify(responseData);
 
     // Clean markdown or extra formatting
     const cleaned = (aiOutput || "")
@@ -139,6 +131,36 @@ async function generateInsightsFromTranscript(transcriptText) {
     console.error("Failed to generate insights from AI:", err);
     throw err;
   }
+}
+
+async function callRapidApiWithFallback(messages) {
+  let lastError = null;
+
+  for (const key of RAPIDAPI_KEYS) {
+    try {
+      const response = await axios.post(
+        "https://chatgpt-api8.p.rapidapi.com/",
+        messages,
+        {
+          headers: {
+            "x-rapidapi-key": key,
+            "x-rapidapi-host": "chatgpt-api8.p.rapidapi.com",
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      if (response?.data) return response.data;
+    } catch (err) {
+      console.warn(`RapidAPI key failed (${key}):`, err.message);
+      lastError = err;
+      continue;
+    }
+  }
+
+  throw new Error(
+    `All RapidAPI keys failed. Last error: ${lastError?.message}`
+  );
 }
 
 // Save insights JSON to DynamoDB under "insights" field

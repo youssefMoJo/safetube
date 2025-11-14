@@ -28,7 +28,22 @@ variable "security_group_id" {
   description = "Security group ID for ECS tasks"
 }
 
-variable "RAPIDAPI_KEY" {
-  description = "X-RapidAPI-Key"
+variable "RAPIDAPI_KEY_1" {
+  description = "RapidAPI Key 1"
+  type        = string
+}
+
+variable "RAPIDAPI_KEY_2" {
+  description = "RapidAPI Key 2"
+  type        = string
+}
+
+variable "RAPIDAPI_KEY_3" {
+  description = "RapidAPI Key 3"
+  type        = string
+}
+
+variable "RAPIDAPI_KEY_4" {
+  description = "RapidAPI Key 4"
   type        = string
 }

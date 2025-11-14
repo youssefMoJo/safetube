@@ -34,8 +34,20 @@ resource "aws_ecs_task_definition" "safetube_task" {
           value = aws_sqs_queue.video_dlq.id
         },
         {
-          name  = "RAPIDAPI_KEY"
-          value = var.RAPIDAPI_KEY
+          name  = "RAPIDAPI_KEY_1"
+          value = var.RAPIDAPI_KEY_1
+        },
+        {
+          name  = "RAPIDAPI_KEY_2"
+          value = var.RAPIDAPI_KEY_2
+        },
+        {
+          name  = "RAPIDAPI_KEY_3"
+          value = var.RAPIDAPI_KEY_3
+        },
+        {
+          name  = "RAPIDAPI_KEY_4"
+          value = var.RAPIDAPI_KEY_4
         },
         { name = "TRANSCRIBE_OUTPUT_BUCKET", value = aws_s3_bucket.transcribe_output_bucket.bucket },
         { name = "COOKIES_BUCKET", value = aws_s3_bucket.cookies_bucket.bucket },
