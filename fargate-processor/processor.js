@@ -3,6 +3,8 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  ListObjectsV2Command,
+  HeadObjectCommand,
 } from "@aws-sdk/client-s3";
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -398,6 +400,73 @@ const saveTranscriptToDynamoDB = async (videoId, transcriptS3Key) => {
   }
 };
 
+// Helper to check if an object exists in S3
+const checkS3ObjectExists = async (bucket, key) => {
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return true;
+  } catch (err) {
+    if (err.name === "NotFound" || err.$metadata?.httpStatusCode === 404) {
+      return false;
+    }
+    throw err;
+  }
+};
+
+// Helper to find existing transcript for a video
+const findExistingTranscript = async (youtubeId) => {
+  try {
+    const prefix = `transcription-${youtubeId}-`;
+    const response = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: TRANSCRIBE_OUTPUT_BUCKET,
+        Prefix: prefix,
+      })
+    );
+
+    if (response.Contents && response.Contents.length > 0) {
+      // Sort by LastModified descending to get the most recent
+      const sorted = response.Contents.sort(
+        (a, b) => b.LastModified - a.LastModified
+      );
+      const latestKey = sorted[0].Key;
+      console.log(`Found existing transcript: ${latestKey}`);
+      return latestKey;
+    }
+    return null;
+  } catch (err) {
+    console.error("Error checking for existing transcript:", err);
+    return null;
+  }
+};
+
+// Helper to find existing insights for a video
+const findExistingInsights = async (youtubeId) => {
+  try {
+    const prefix = `insights-${youtubeId}-`;
+    const response = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: TRANSCRIBE_OUTPUT_BUCKET,
+        Prefix: prefix,
+      })
+    );
+
+    if (response.Contents && response.Contents.length > 0) {
+      // Sort by LastModified descending to get the most recent
+      const sorted = response.Contents.sort(
+        (a, b) => b.LastModified - a.LastModified
+      );
+      const latestKey = sorted[0].Key;
+      console.log(`Found existing insights: ${latestKey}`);
+      return latestKey;
+    }
+    return null;
+  } catch (err) {
+    console.error("Error checking for existing insights:", err);
+    return null;
+  }
+};
+
 // Helper to validate the structure of insights JSON
 function validateInsightsJson(insights) {
   if (!insights || typeof insights !== "object") {
@@ -479,41 +548,81 @@ const main = async () => {
   await updateVideoStatus(VIDEO_ID, "processing", null, RETRY_COUNT);
 
   try {
-    await downloadVideoWithAudio(YOUTUBE_LINK, outputFile);
-    await uploadToS3(outputFile, BUCKET_NAME, s3Key);
+    // === Guard Layer 1: Check for existing transcript ===
+    let transcriptS3Key = await findExistingTranscript(youtubeId);
+    let transcriptJson = null;
+    let downloadedAudio = false; // Track if we downloaded and uploaded audio
 
-    const timestamp = Date.now();
-    const transcriptS3Key = `transcription-${youtubeId}-${timestamp}.json`;
-    const jobName = `transcription-${youtubeId}-${timestamp}`; // unique job name for Transcribe
-    const mediaUri = `s3://${BUCKET_NAME}/${s3Key}`;
-    await startTranscription(jobName, mediaUri);
+    if (transcriptS3Key) {
+      console.log(
+        `Skipping video download and transcription - using existing transcript: ${transcriptS3Key}`
+      );
+      // Download existing transcript
+      const transcriptObj = await s3.send(
+        new GetObjectCommand({
+          Bucket: TRANSCRIBE_OUTPUT_BUCKET,
+          Key: transcriptS3Key,
+        })
+      );
+      const streamToString = (stream) =>
+        new Promise((resolve, reject) => {
+          const chunks = [];
+          stream.on("data", (chunk) => chunks.push(chunk));
+          stream.on("error", reject);
+          stream.on("end", () =>
+            resolve(Buffer.concat(chunks).toString("utf-8"))
+          );
+        });
+      const transcriptContent = await streamToString(transcriptObj.Body);
+      transcriptJson = JSON.parse(transcriptContent);
 
-    // Wait for transcription to complete
-    const transcriptUri = await waitForTranscription(jobName);
+      // Update DynamoDB with existing transcript S3 key
+      await saveTranscriptToDynamoDB(VIDEO_ID, transcriptS3Key);
+    } else {
+      // No existing transcript found, proceed with download and transcription
+      console.log(
+        `No existing transcript found for ${youtubeId}, downloading video and starting transcription`
+      );
+      await downloadVideoWithAudio(YOUTUBE_LINK, outputFile);
+      await uploadToS3(outputFile, BUCKET_NAME, s3Key);
+      downloadedAudio = true;
 
-    // Save transcript S3 key to DynamoDB
-    await saveTranscriptToDynamoDB(VIDEO_ID, transcriptS3Key);
+      const timestamp = Date.now();
+      transcriptS3Key = `transcription-${youtubeId}-${timestamp}.json`;
+      const jobName = `transcription-${youtubeId}-${timestamp}`; // unique job name for Transcribe
+      const mediaUri = `s3://${BUCKET_NAME}/${s3Key}`;
+      await startTranscription(jobName, mediaUri);
+
+      // Wait for transcription to complete
+      const transcriptUri = await waitForTranscription(jobName);
+
+      // Save transcript S3 key to DynamoDB
+      await saveTranscriptToDynamoDB(VIDEO_ID, transcriptS3Key);
+    }
 
     // === AI Insights Generation Step ===
-    // Download transcript file from S3 output bucket
-    const transcriptFilePath = path.join("/tmp", transcriptS3Key);
-    const transcriptObj = await s3.send(
-      new GetObjectCommand({
-        Bucket: TRANSCRIBE_OUTPUT_BUCKET,
-        Key: transcriptS3Key,
-      })
-    );
-    const streamToString = (stream) =>
-      new Promise((resolve, reject) => {
-        const chunks = [];
-        stream.on("data", (chunk) => chunks.push(chunk));
-        stream.on("error", reject);
-        stream.on("end", () =>
-          resolve(Buffer.concat(chunks).toString("utf-8"))
-        );
-      });
-    const transcriptContent = await streamToString(transcriptObj.Body);
-    const transcriptJson = JSON.parse(transcriptContent);
+    // Download transcript file from S3 output bucket if not already loaded
+    if (!transcriptJson) {
+      const transcriptFilePath = path.join("/tmp", transcriptS3Key);
+      const transcriptObj = await s3.send(
+        new GetObjectCommand({
+          Bucket: TRANSCRIBE_OUTPUT_BUCKET,
+          Key: transcriptS3Key,
+        })
+      );
+      const streamToString = (stream) =>
+        new Promise((resolve, reject) => {
+          const chunks = [];
+          stream.on("data", (chunk) => chunks.push(chunk));
+          stream.on("error", reject);
+          stream.on("end", () =>
+            resolve(Buffer.concat(chunks).toString("utf-8"))
+          );
+        });
+      const transcriptContent = await streamToString(transcriptObj.Body);
+      transcriptJson = JSON.parse(transcriptContent);
+    }
+
     const transcriptText =
       transcriptJson.results &&
       transcriptJson.results.transcripts &&
@@ -525,119 +634,175 @@ const main = async () => {
       throw new Error("Transcript text is empty, cannot generate AI insights.");
     }
 
-    // Generate AI insights from transcript
-    const aiInsights = await generateInsightsFromTranscript(transcriptText);
+    // === Guard Layer 2: Check for existing insights ===
+    let existingInsightsS3Key = await findExistingInsights(youtubeId);
+    let normalizedInsights = null;
 
-    // === Normalization Step ===
-    function normalizeInsights(input) {
-      if (!input || typeof input !== "object")
-        return { lessons: [], examples: [], tips: [] };
-
-      const normalized = {
-        lessons: [],
-        examples: Array.isArray(input.examples) ? input.examples : [],
-        tips: Array.isArray(input.tips) ? input.tips : [],
-      };
-
-      if (Array.isArray(input.lessons)) {
-        normalized.lessons = input.lessons.map((lesson) => ({
-          title:
-            lesson.title ||
-            lesson.lesson ||
-            lesson.key ||
-            lesson.key_insight ||
-            "",
-          summary: lesson.summary || lesson.details || "",
-          detailed_explanation:
-            lesson.detailed_explanation || lesson.details || "",
-          action_steps: Array.isArray(lesson.action_steps)
-            ? lesson.action_steps
-            : Array.isArray(lesson.tips)
-            ? lesson.tips
-            : lesson.action_step
-            ? [lesson.action_step]
-            : [],
-          examples: Array.isArray(lesson.examples) ? lesson.examples : [],
-        }));
-      }
-
-      // Ensure all keys exist
-      if (!normalized.quotes)
-        normalized.quotes = Array.isArray(input.quotes) ? input.quotes : [];
-      if (!normalized.mindset_shifts)
-        normalized.mindset_shifts = Array.isArray(input.mindset_shifts)
-          ? input.mindset_shifts
-          : [];
-      if (!normalized.reflection_questions)
-        normalized.reflection_questions = Array.isArray(
-          input.reflection_questions
-        )
-          ? input.reflection_questions
-          : [];
-      if (!normalized.mistakes_or_warnings)
-        normalized.mistakes_or_warnings = Array.isArray(
-          input.mistakes_or_warnings
-        )
-          ? input.mistakes_or_warnings
-          : [];
-      if (!normalized.personal_insights)
-        normalized.personal_insights = Array.isArray(input.personal_insights)
-          ? input.personal_insights
-          : [];
-      if (!normalized.emotional_tone)
-        normalized.emotional_tone = input.emotional_tone || "";
-      if (!normalized.category) normalized.category = input.category || "";
-      if (!normalized.tags)
-        normalized.tags = Array.isArray(input.tags) ? input.tags : [];
-
-      return normalized;
-    }
-
-    // Always normalize before saving
-    const normalizedInsights = normalizeInsights(aiInsights);
-
-    // Save normalized JSON to S3 with unified key
-    const insightsS3Key = `insights-${youtubeId}-${timestamp}.json`;
-    await s3.send(
-      new PutObjectCommand({
-        Bucket: TRANSCRIBE_OUTPUT_BUCKET,
-        Key: insightsS3Key,
-        Body: JSON.stringify(normalizedInsights, null, 2),
-        ContentType: "application/json",
-      })
-    );
-    console.log(`Saved normalized AI insights JSON to S3: ${insightsS3Key}`);
-
-    // Update DynamoDB with S3 key and timestamp
-    const params = {
-      TableName: DYNAMO_VIDEOS_TABLE,
-      Key: { video_id: { S: VIDEO_ID } },
-      UpdateExpression: "SET insights_s3_key = :key, insights_saved_at = :time",
-      ExpressionAttributeValues: {
-        ":key": { S: insightsS3Key },
-        ":time": { S: new Date().toISOString() },
-      },
-    };
-    await dynamo.send(new UpdateItemCommand(params));
-    console.log(
-      `Updated DynamoDB with AI insights S3 key for video ${VIDEO_ID}`
-    );
-    // === End AI Insights Generation Step ===
-
-    // Clean up local files
-    deleteFile(outputFile);
-
-    // Clean up uploaded audio from S3
-    try {
-      await s3.send(
-        new DeleteObjectCommand({
-          Bucket: BUCKET_NAME,
-          Key: s3Key,
+    if (existingInsightsS3Key) {
+      console.log(
+        `Skipping AI insights generation - using existing insights: ${existingInsightsS3Key}`
+      );
+      // Download existing insights
+      const insightsObj = await s3.send(
+        new GetObjectCommand({
+          Bucket: TRANSCRIBE_OUTPUT_BUCKET,
+          Key: existingInsightsS3Key,
         })
       );
-      console.log(`Deleted audio from S3: ${s3Key}`);
-    } catch (err) {
-      console.error(`Failed to delete audio from S3: ${s3Key}`, err);
+      const streamToString = (stream) =>
+        new Promise((resolve, reject) => {
+          const chunks = [];
+          stream.on("data", (chunk) => chunks.push(chunk));
+          stream.on("error", reject);
+          stream.on("end", () =>
+            resolve(Buffer.concat(chunks).toString("utf-8"))
+          );
+        });
+      const insightsContent = await streamToString(insightsObj.Body);
+      normalizedInsights = JSON.parse(insightsContent);
+
+      // Update DynamoDB with existing insights S3 key
+      const params = {
+        TableName: DYNAMO_VIDEOS_TABLE,
+        Key: { video_id: { S: VIDEO_ID } },
+        UpdateExpression:
+          "SET insights_s3_key = :key, insights_saved_at = :time",
+        ExpressionAttributeValues: {
+          ":key": { S: existingInsightsS3Key },
+          ":time": { S: new Date().toISOString() },
+        },
+      };
+      await dynamo.send(new UpdateItemCommand(params));
+      console.log(
+        `Updated DynamoDB with existing AI insights S3 key for video ${VIDEO_ID}: ${existingInsightsS3Key}`
+      );
+    } else {
+      // No existing insights found, proceed with generation
+      // Generate AI insights from transcript
+      const aiInsights = await generateInsightsFromTranscript(transcriptText);
+
+      // === Normalization Step ===
+      function normalizeInsights(input) {
+        if (!input || typeof input !== "object")
+          return { lessons: [], examples: [], tips: [] };
+
+        const normalized = {
+          lessons: [],
+          examples: Array.isArray(input.examples) ? input.examples : [],
+          tips: Array.isArray(input.tips) ? input.tips : [],
+        };
+
+        if (Array.isArray(input.lessons)) {
+          normalized.lessons = input.lessons.map((lesson) => ({
+            title:
+              lesson.title ||
+              lesson.lesson ||
+              lesson.key ||
+              lesson.key_insight ||
+              "",
+            summary: lesson.summary || lesson.details || "",
+            detailed_explanation:
+              lesson.detailed_explanation || lesson.details || "",
+            action_steps: Array.isArray(lesson.action_steps)
+              ? lesson.action_steps
+              : Array.isArray(lesson.tips)
+              ? lesson.tips
+              : lesson.action_step
+              ? [lesson.action_step]
+              : [],
+            examples: Array.isArray(lesson.examples) ? lesson.examples : [],
+          }));
+        }
+
+        // Ensure all keys exist
+        if (!normalized.quotes)
+          normalized.quotes = Array.isArray(input.quotes) ? input.quotes : [];
+        if (!normalized.mindset_shifts)
+          normalized.mindset_shifts = Array.isArray(input.mindset_shifts)
+            ? input.mindset_shifts
+            : [];
+        if (!normalized.reflection_questions)
+          normalized.reflection_questions = Array.isArray(
+            input.reflection_questions
+          )
+            ? input.reflection_questions
+            : [];
+        if (!normalized.mistakes_or_warnings)
+          normalized.mistakes_or_warnings = Array.isArray(
+            input.mistakes_or_warnings
+          )
+            ? input.mistakes_or_warnings
+            : [];
+        if (!normalized.personal_insights)
+          normalized.personal_insights = Array.isArray(input.personal_insights)
+            ? input.personal_insights
+            : [];
+        if (!normalized.emotional_tone)
+          normalized.emotional_tone = input.emotional_tone || "";
+        if (!normalized.category) normalized.category = input.category || "";
+        if (!normalized.tags)
+          normalized.tags = Array.isArray(input.tags) ? input.tags : [];
+
+        return normalized;
+      }
+
+      // Always normalize before saving
+      normalizedInsights = normalizeInsights(aiInsights);
+
+      // Save normalized JSON to S3 with unified key
+      const timestamp = Date.now();
+      const insightsS3Key = `insights-${youtubeId}-${timestamp}.json`;
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: TRANSCRIBE_OUTPUT_BUCKET,
+          Key: insightsS3Key,
+          Body: JSON.stringify(normalizedInsights, null, 2),
+          ContentType: "application/json",
+        })
+      );
+      console.log(`Saved normalized AI insights JSON to S3: ${insightsS3Key}`);
+
+      // Update DynamoDB with S3 key and timestamp
+      const params = {
+        TableName: DYNAMO_VIDEOS_TABLE,
+        Key: { video_id: { S: VIDEO_ID } },
+        UpdateExpression:
+          "SET insights_s3_key = :key, insights_saved_at = :time",
+        ExpressionAttributeValues: {
+          ":key": { S: insightsS3Key },
+          ":time": { S: new Date().toISOString() },
+        },
+      };
+      await dynamo.send(new UpdateItemCommand(params));
+      console.log(
+        `Updated DynamoDB with AI insights S3 key for video ${VIDEO_ID}`
+      );
+    }
+    // === End AI Insights Generation Step ===
+
+    // Clean up local files and S3 audio (only if they were created)
+    if (downloadedAudio) {
+      // Clean up local files
+      if (fs.existsSync(outputFile)) {
+        deleteFile(outputFile);
+      }
+
+      // Clean up uploaded audio from S3
+      try {
+        await s3.send(
+          new DeleteObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: s3Key,
+          })
+        );
+        console.log(`Deleted audio from S3: ${s3Key}`);
+      } catch (err) {
+        console.error(`Failed to delete audio from S3: ${s3Key}`, err);
+      }
+    } else {
+      console.log(
+        `Skipping cleanup - audio was not downloaded (transcript already existed)`
+      );
     }
 
     console.log("Audio processing and transcription complete.");
