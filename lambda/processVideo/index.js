@@ -84,12 +84,27 @@ export const handler = async (event) => {
 
     const data = response.data;
 
+    // Check video duration - reject if exceeds 10 minutes (600 seconds)
+    const durationInSeconds = data.stats.lengthSeconds;
+    const maxDurationSeconds = 10 * 60; // 10 minutes in seconds
+
+    if (durationInSeconds > maxDurationSeconds) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({
+          message:
+            "Video duration exceeds 10 minutes. Maximum allowed duration is 10 minutes.",
+          duration: durationInSeconds,
+        }),
+      };
+    }
+
     const metadata = {
       video_id: extractYouTubeID(youtube_link),
       title: data.title,
       description: data.stats.description || "",
       picture: data.picture,
-      duration: data.stats.lengthSeconds,
+      duration: durationInSeconds,
       // links: data.links,
       user_url: data.author.user_url,
       user_name: data.author.name,
